@@ -135,7 +135,7 @@ def init_db():
     # Inintialize the database with a default article
     name = "Infinite Wiki"
     token = generate_token(name)
-    with open('default_article.txt', 'r') as file:
+    with open('default_article.txt', 'r', encoding='utf-8') as file:
         text = file.read()
 
     conn.execute('''
@@ -182,13 +182,12 @@ def generate_article(token, name, user):
 def check_pointer(word):
     doc = NLP(word)
     for token in doc:
-        if token.lemma_ == token and token.pos in ["PROPN", "NOUN"]:
+        if token.is_oov == True and token.lemma_ == word:
             pointer = "<UNK>"
         else:
             pointer = token.lemma_.lower()
 
     if pointer == "<UNK>":
-        print(f"Word '{word}' is not recognized by the model, using OpenAI to generate pointer.")
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
         response = client.responses.create(
@@ -252,7 +251,7 @@ def index():
     conn = sqlite3.connect('wiki.db')
     conn.row_factory = sqlite3.Row  # Enable dict-like access
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM articles WHERE name = ?', ("Infinite Wiki",))
+    cursor.execute('SELECT * FROM articles WHERE id = ?', (1,))
     article = cursor.fetchone()
     conn.close()
 
