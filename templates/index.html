@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InfiniteWikiHomePage</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  <header>
+    <div class="site-name">InfiniteWiki</div>
+
+    <div class="search-bar">
+      <input type="text" placeholder="Rechercher...">
+    </div>
+  </header>
+
+  <main>
+    <div class="content">
+      <h2>Infinite Wiki</h2>
+      <p>
+        Infinite Wiki is an interactive word exploration game where players dive into an endless web of definitions.
+        Starting from a single word, players can click on any word within its definition to reveal a new definition,
+        continuing the chain of discovery indefinitely. It’s a playful and educational experience that highlights the
+        interconnected nature of language and meaning.
+      </p>
+      <p>
+        The game was created on August 2, 2025, by two young developers, Five and Lalaulune, during their summer vacation in London.
+        It was a slightly grey day when the idea struck Five like a miracle—as if the clouds had delivered it directly to him.
+        Inspired by the idea of language as a living network, they started prototyping Infinite Wiki right away.
+        What began as a spontaneous spark quickly turned into a creative way to explore how words lead to other words,
+        sparking curiosity with every click.
+      </p>
+      <p>
+        Whether you're here to learn, explore, or simply get lost in definitions, Infinite Wiki invites you to start with one word—and keep going.
+      </p>
+    </div>
+
+
+    <aside class="sidebar">
+        <br>
+
+        <h3>Community Stats: </h3>
+        <p><strong>Words discovered by community:</strong> 256</p>
+        <p><strong>Undiscovered words:</strong> 742</p>
+        <p><strong>Top discoverer:</strong> Five</p>
+
+        <br>
+
+        <h3>Your Stats: </h3>
+        <p><strong>Words you discovered:</strong> 15</p>
+        <h4>Last 10 you discovered:</h4>
+        <ul>
+          <li>Quantum</li>
+          <li>Algorithm</li>
+          <li>Neuron</li>
+          <li>Protocol</li>
+          <li>Syntax</li>
+          <li>Cache</li>
+          <li>Buffer</li>
+          <li>Daemon</li>
+          <li>Node</li>
+          <li>Loop</li>
+        </ul>
+    </aside>
+  </main>
+
+  <footer>
+    <p>&copy; By Five and Lalaulune</p>
+  </footer>
+
+</body>
+</html>
