@@ -8,6 +8,9 @@ import dotenv
 import os
 import re
 import tqdm
+import spacy
+
+NLP = spacy.load("en_core_web_sm")
 
 dotenv.load_dotenv()
 
@@ -41,12 +44,10 @@ def tokenize(words):
     for word in tqdm.tqdm(words, desc="Tokenizing words"):
         pointer_token, pointer = check_pointer(word)  # Make sure the word doesnt need to point to another word
         if pointer_token == 0:
-            print(f"Tokenizing word: {word}")
             token = generate_token(word)  # Generate a token for the word
             cursor.execute('INSERT OR IGNORE INTO articles (token, name) VALUES (?, ?)', (token, word))
             conn.commit()
         else:
-            print(f"Tokenizing word: {word} with pointer to {pointer}")
             cursor.execute('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', (pointer_token, pointer, 0))
             conn.commit()
             cursor.execute('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', (pointer_token, word, 1))
@@ -100,6 +101,7 @@ def generate_links(text):
             word_list_cleaned.append(word)
     cleaned_list = list(set(word_list_cleaned))
     li_unknown = check_tokens(cleaned_list)
+    print(f"Tokenized words : {len(cleaned_list) - len(li_unknown)}")
     print(f"Unknown words : {len(li_unknown)}")
 
     tokenize(li_unknown)
@@ -156,7 +158,7 @@ def generate_article(token, name, user):
             },
             {
                 "role": "system",
-                "content": "Use HTML formatting to structure the article. Do not include any links or references to external sources. The article should be self-contained. Do not include the title."
+                "content": "Use HTML formatting to structure the article. Do not include any links or references to external sources. Do not define the html no <head> or <body> tags nor <html> or <!DOCTYPE html>, maximum size should be h2. Do not include the title of the article, start with the introduction."
             },
             {
                 "role": "user",
@@ -170,7 +172,7 @@ def generate_article(token, name, user):
     cursor.execute('''
         UPDATE articles
         SET info_text = ?, num_visits = num_visits + 1, discovered_by = ?, discovery_time = ?
-        WHERE token = ?
+        WHERE token = ? and pointer = 0
     ''', (response.output_text, user, datetime.datetime.now(), token))
 
     conn.commit()
@@ -178,23 +180,33 @@ def generate_article(token, name, user):
     return response.output_text
 
 def check_pointer(word):
-    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    doc = NLP(word)
+    for token in doc:
+        if token.lemma_ == token and token.pos in ["PROPN", "NOUN"]:
+            pointer = "<UNK>"
+        else:
+            pointer = token.lemma_.lower()
 
-    response = client.responses.create(
-        model="gpt-4.1-nano-2025-04-14",
-        input=[
-            {
-                "role": "system",
-                "content": "If the word is plural, output the singular word. If the word is a verb, output the unconjugated form. ONLY OUTPUT 1 WORD."
-            },
-            {
-                "role": "user",
-                "content": f"{word}"
-            }
-        ]
-    )
+    if pointer == "<UNK>":
+        print(f"Word '{word}' is not recognized by the model, using OpenAI to generate pointer.")
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-    pointer = response.output_text.strip().lower()
+        response = client.responses.create(
+            model="gpt-4.1-nano-2025-04-14",
+            input=[
+                {
+                    "role": "system",
+                    "content": "If the word is plural, output the singular word. If the word is a verb, output the unconjugated form. ONLY OUTPUT 1 WORD."
+                },
+                {
+                    "role": "user",
+                    "content": f"{word}"
+                }
+            ]
+        )
+
+        pointer = response.output_text.strip().lower()
+    
     pointer = re.sub(r'[^a-z0-9]', '', pointer)  # Clean the pointer word
     if word == pointer:
         return 0, ""
@@ -208,13 +220,32 @@ def check_pointer(word):
     if existing_pointer:
         pointer_token = existing_pointer[0]
     else:
-        print(f"Tokenizing pointer word: {pointer}")
         pointer_token = generate_token(pointer)  # Generate a token for the pointer word
 
     conn.commit()
     conn.close()
     return pointer_token, pointer
 
+def get_stats():
+    conn = sqlite3.connect('wiki.db')
+    conn.row_factory = sqlite3.Row  # Enable dict-like access
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) as total_articles FROM articles WHERE pointer = 0 and info_text != ""')
+    total_articles = cursor.fetchone()["total_articles"]
+
+    cursor.execute('SELECT COUNT(*) as total_undiscovered FROM articles WHERE info_text == "" and pointer = 0')
+    total_undiscovered = cursor.fetchone()["total_undiscovered"]
+
+    cursor.execute('SELECT discovered_by, COUNT(*) AS discoveries FROM articles WHERE discovered_by != "" GROUP BY discovered_by ORDER BY discoveries DESC LIMIT 1')
+    most_active_user = cursor.fetchone()
+
+    stat = {
+        "total_articles": total_articles,
+        "total_undiscovered": total_undiscovered,
+        "most_active_user": most_active_user["discovered_by"] if most_active_user else "None",
+    }
+
+    return stat
 
 @app.route('/')
 def index():
@@ -226,7 +257,7 @@ def index():
     conn.close()
 
     info_text = generate_links(article["info_text"])
-    return render_template('index.html', wiki_title=article["name"], wiki_content=info_text)
+    return render_template('index.html', wiki_title=article["name"], wiki_content=info_text, stats=get_stats())
 
 
 @app.route('/article/<token>')
@@ -247,7 +278,7 @@ def article(token):
             info_text = generate_article(token, name, "user")  # Generate article if it doesn't exist
 
         links = generate_links(info_text)
-        return render_template('index.html', wiki_title=name, wiki_content=links)
+        return render_template('index.html', wiki_title=name, wiki_content=links, stats=get_stats())
     else:
         return "Article not found + ", 404
 
