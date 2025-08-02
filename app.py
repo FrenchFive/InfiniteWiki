@@ -7,6 +7,7 @@ import datetime
 import dotenv
 import os
 import re
+import tqdm
 
 dotenv.load_dotenv()
 
@@ -37,15 +38,19 @@ def tokenize(words):
     conn = sqlite3.connect('wiki.db')
     cursor = conn.cursor()
     
-    for word in words:
+    for word in tqdm.tqdm(words, desc="Tokenizing words"):
         pointer_token, pointer = check_pointer(word)  # Make sure the word doesnt need to point to another word
         if pointer_token == 0:
             print(f"Tokenizing word: {word}")
             token = generate_token(word)  # Generate a token for the word
             cursor.execute('INSERT OR IGNORE INTO articles (token, name) VALUES (?, ?)', (token, word))
+            conn.commit()
         else:
             print(f"Tokenizing word: {word} with pointer to {pointer}")
+            cursor.execute('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', (pointer_token, pointer, 0))
+            conn.commit()
             cursor.execute('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', (pointer_token, word, 1))
+            conn.commit()
             
     
     conn.commit()
@@ -96,6 +101,7 @@ def generate_links(text):
     link_list = linkenize(word_list)
     
     paragraph = " ".join(link_list)
+    print(f"Generated paragraph: {paragraph}")
     return paragraph
 
 def init_db():
@@ -165,12 +171,12 @@ def generate_article(token, name, user):
 def check_pointer(word):
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-    response = client.chat.completions.create(
+    response = client.responses.create(
         model="gpt-4.1-nano-2025-04-14",
-        messages=[
+        input=[
             {
                 "role": "system",
-                "content": "Output the word if it is the most relevant, otherwise output the most relevant word. 'is' and 'are' should point to 'be', referenced should point to 'reference' etc. ONLY output a SINGLE WORD."
+                "content": "If the word is plural, output the singular word. If the word is a verb, output the unconjugated form. ONLY OUTPUT 1 WORD."
             },
             {
                 "role": "user",
@@ -182,7 +188,7 @@ def check_pointer(word):
     pointer = response.output_text.strip().lower()
     pointer = re.sub(r'[^a-z0-9]', '', pointer)  # Clean the pointer word
     if word == pointer:
-        return 0
+        return 0, ""
     
     
     conn = sqlite3.connect('wiki.db')
@@ -195,43 +201,44 @@ def check_pointer(word):
     else:
         print(f"Tokenizing pointer word: {pointer}")
         pointer_token = generate_token(pointer)  # Generate a token for the pointer word
-        cursor.execute('INSERT OR IGNORE INTO articles (token, name) VALUES (?, ?)', (pointer_token, pointer))
 
     conn.commit()
     conn.close()
-    return pointer_token
+    return pointer_token, pointer
 
 
 @app.route('/')
 def index():
     conn = sqlite3.connect('wiki.db')
+    conn.row_factory = sqlite3.Row  # Enable dict-like access
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM articles WHERE name = ?', ("Infinite Wiki",))
     article = cursor.fetchone()
     conn.close()
 
-    info_text = generate_links(article[3])
-    return render_template('index.html', wiki_title=article[2], wiki_content=info_text)
+    info_text = generate_links(article["info_text"])
+    return render_template('index.html', wiki_title=article["name"], wiki_content=info_text)
 
 
 @app.route('/article/<token>')
 def article(token):
     conn = sqlite3.connect('wiki.db')
+    conn.row_factory = sqlite3.Row  # Enable dict-like access
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM articles WHERE token = ?', (token,))
+    cursor.execute('SELECT * FROM articles WHERE token = ? AND pointer = ?', (token, 0))
     article = cursor.fetchone()
     conn.close()
 
     if article:
-        token = article[1]
-        name = article[2]
-        info_text = article[3]
+        token = article["token"]
+        name = article["name"]
+        info_text = article["info_text"]
 
         if len(info_text) == 0:
             info_text = generate_article(token, name, "user")  # Generate article if it doesn't exist
 
-        info_text = generate_links(info_text)
-        return render_template('index.html', wiki_title=name, wiki_content=info_text)
+        links = generate_links(info_text)
+        return render_template('index.html', wiki_title=name, wiki_content=links)
     else:
         return "Article not found + ", 404
 
