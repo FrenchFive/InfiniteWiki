@@ -57,14 +57,17 @@ def tokenize(words):
     conn.close()
 
 def linkenize(words):
+    html = re.compile('<.*?>|&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});')
     conn = sqlite3.connect('wiki.db')
     cursor = conn.cursor()
     
     linkenized_words = []
     for word in words:
         word_clean = word.strip().lower()
+        word_clean = re.sub(html, '', word_clean)  # Remove HTML tags
         word_clean = re.sub(r'[^a-z0-9]', '', word_clean)  # Clean the word
-        if len(word_clean) > 0:
+
+        if len(word_clean) == 0:
             linkenized_words.append(word)
         else:
             cursor.execute('SELECT token FROM articles WHERE name = ?', (word_clean,))
@@ -85,9 +88,12 @@ def generate_token(word):
 def generate_links(text):
     word_list = text.split()
 
+    html = re.compile('<.*?>|&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});')
+    word_list_html = [re.sub(html, '', word) for word in word_list]  # Remove HTML tags
+
 
     word_list_cleaned = []
-    for word in word_list:
+    for word in word_list_html:
         word = word.strip().lower()
         word = re.sub(r'[^a-z0-9]', '', word)
         if len(word) > 0:
@@ -99,9 +105,8 @@ def generate_links(text):
     tokenize(li_unknown)
 
     link_list = linkenize(word_list)
-    
+
     paragraph = " ".join(link_list)
-    print(f"Generated paragraph: {paragraph}")
     return paragraph
 
 def init_db():
@@ -113,7 +118,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS articles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                token TEXT UNIQUE,
+                token TEXT,
                 name TEXT UNIQUE,
                 pointer INTEGER DEFAULT 0,
                 info_text TEXT DEFAULT '',
@@ -147,7 +152,11 @@ def generate_article(token, name, user):
         input=[
             {
                 "role": "system",
-                "content": "You are an expert in creating detailed articles for a wiki (at least 500 words). Only output the article text without any additional commentary."
+                "content": "You are an expert in creating detailed articles for a wiki (at least 500 words). Only output the article text without any additional commentary. Be creative and dont hesitate to invent new information if necessary."
+            },
+            {
+                "role": "system",
+                "content": "Use HTML formatting to structure the article. Do not include any links or references to external sources. The article should be self-contained. Do not include the title."
             },
             {
                 "role": "user",
