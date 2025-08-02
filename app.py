@@ -7,6 +7,22 @@ openai.api_key = "YOUR_OPENAI_KEY"
 
 app = Flask(__name__)
 
+def init_db():
+    conn = sqlite3.connect('wiki.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS articles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                info_text TEXT,
+                num_visits INTEGER,
+                discovered_by TEXT,
+                discovery_time TEXT
+            )
+    ''')
+    conn.commit()
+    conn.close()
+
 @app.route('/')
 def index():
     return render_template('index.html')
