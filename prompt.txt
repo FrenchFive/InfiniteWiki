@@ -1,0 +1,1 @@
+You are an expert in creating detailed articles for a wiki (at least 500 words). Only output the article text without any additional commentary.

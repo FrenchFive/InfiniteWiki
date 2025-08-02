@@ -14,7 +14,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 app = Flask(__name__)
 
 def generate_token(word):
-    word = word.lower().strip()
+    word = word.lower().strip().replace(" ", "")  # Normalize the word for token generation
     
     if not word.isalnum():
         return -1  # Invalid token if the word contains non-alphanumeric characters
@@ -101,11 +101,11 @@ def gen_article(token, name, user):
         input=[
             {
                 "role": "system",
-                "content": "You are an expert in creating detailed articles for a wiki. Only output the article text without any additional commentary."
+                "content": "You are an expert in creating detailed articles for a wiki (at least 500 words). Only output the article text without any additional commentary."
             },
             {
                 "role": "user",
-                "content": f"Create a detailed article about {name}. The article should be informative and engaging."
+                "content": f"Create a detailed article about {name}."
             }
         ],
     )
@@ -120,10 +120,19 @@ def gen_article(token, name, user):
 
     conn.commit()
     conn.close()
+    return response.output_text
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    conn = sqlite3.connect('wiki.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM articles WHERE name = ?', ("Infinite Wiki",))
+    article = cursor.fetchone()
+    conn.close()
+
+    info_text = gen_links(article[3])
+    return render_template('index.html', wiki_title=article[2], wiki_content=info_text)
+
 
 @app.route('/article/<token>')
 def article(token):
@@ -139,10 +148,10 @@ def article(token):
         info_text = article[3]
 
         if len(info_text) == 0:
-            gen_article(token, name, "user")  # Generate article if it doesn't exist
-        
-        article[3] = gen_links(token, name)
-        return render_template('article.html', article=article)
+            info_text = gen_article(token, name, "user")  # Generate article if it doesn't exist
+
+        info_text = gen_links(article[3])
+        return render_template('index.html', wiki_title=name, wiki_article=article)
     else:
         return "Article not found + ", 404
 
