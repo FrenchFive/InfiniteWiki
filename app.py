@@ -38,11 +38,13 @@ def tokenize(words):
     cursor = conn.cursor()
     
     for word in words:
-        pointer_token = check_pointer(word)  # Make sure the word doesnt need to point to another word
+        pointer_token, pointer = check_pointer(word)  # Make sure the word doesnt need to point to another word
         if pointer_token == 0:
+            print(f"Tokenizing word: {word}")
             token = generate_token(word)  # Generate a token for the word
             cursor.execute('INSERT OR IGNORE INTO articles (token, name) VALUES (?, ?)', (token, word))
         else:
+            print(f"Tokenizing word: {word} with pointer to {pointer}")
             cursor.execute('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', (pointer_token, word, 1))
             
     
@@ -55,12 +57,12 @@ def linkenize(words):
     
     linkenized_words = []
     for word in words:
-        word = word.strip().lower()
-        word = re.sub(r'[^a-z0-9]', '', word)  # Clean the word
-        if len(word) > 0:
+        word_clean = word.strip().lower()
+        word_clean = re.sub(r'[^a-z0-9]', '', word_clean)  # Clean the word
+        if len(word_clean) > 0:
             linkenized_words.append(word)
         else:
-            cursor.execute('SELECT token FROM articles WHERE name = ?', (word,))
+            cursor.execute('SELECT token FROM articles WHERE name = ?', (word_clean,))
             data = cursor.fetchone()
             if data:
                 token = data[0]
@@ -72,32 +74,10 @@ def linkenize(words):
     conn.close()
     return linkenized_words
 
-def check_token(name):
-    """Check if the token already exists in the database."""
-    conn = sqlite3.connect('wiki.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT token, pointer FROM articles WHERE name = ?', (name,))
-    data = cursor.fetchone()
-    if data:
-        token = data[0]
-        pointer = data[1]
-        if token == 0:
-            return pointer  # Return the pointer if the token is 0
-        return token  # Return the existing token
-    else:
-        pointer = check_pointer(name)  # Check if a pointer exists for the name
-        if pointer == 0:
-            token = generate_token(name)
-        else:
-            token = pointer  # Use the pointer as the token
-    conn.close()
-
-    return token
-
 def generate_token(word):
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, word))
 
-def gen_links(text):
+def generate_links(text):
     word_list = text.split()
 
 
@@ -109,6 +89,7 @@ def gen_links(text):
             word_list_cleaned.append(word)
     cleaned_list = list(set(word_list_cleaned))
     li_unknown = check_tokens(cleaned_list)
+    print(f"Unknown words : {len(li_unknown)}")
 
     tokenize(li_unknown)
 
@@ -152,29 +133,7 @@ def init_db():
 
     conn.close()
 
-def add_article(token, name):
-    conn = sqlite3.connect('wiki.db')
-    cursor = conn.cursor()
-
-    # Check if the article already exists
-    cursor.execute('SELECT * FROM articles WHERE token = ?', (token,))
-    existing_article = cursor.fetchone()
-
-    if existing_article:
-        conn.close()
-        return 0
-    else:
-        # Insert the new article into the database
-        cursor.execute('''
-            INSERT OR IGNORE INTO articles (token, name)
-            VALUES (?, ?)
-        ''', (token, name))
-
-        conn.commit()
-        conn.close()
-        return 1
-
-def gen_article(token, name, user):
+def generate_article(token, name, user):
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
     response = client.responses.create(
@@ -234,6 +193,7 @@ def check_pointer(word):
     if existing_pointer:
         pointer_token = existing_pointer[0]
     else:
+        print(f"Tokenizing pointer word: {pointer}")
         pointer_token = generate_token(pointer)  # Generate a token for the pointer word
         cursor.execute('INSERT OR IGNORE INTO articles (token, name) VALUES (?, ?)', (pointer_token, pointer))
 
@@ -250,7 +210,7 @@ def index():
     article = cursor.fetchone()
     conn.close()
 
-    info_text = gen_links(article[3])
+    info_text = generate_links(article[3])
     return render_template('index.html', wiki_title=article[2], wiki_content=info_text)
 
 
@@ -268,9 +228,9 @@ def article(token):
         info_text = article[3]
 
         if len(info_text) == 0:
-            info_text = gen_article(token, name, "user")  # Generate article if it doesn't exist
+            info_text = generate_article(token, name, "user")  # Generate article if it doesn't exist
 
-        info_text = gen_links(info_text)
+        info_text = generate_links(info_text)
         return render_template('index.html', wiki_title=name, wiki_content=info_text)
     else:
         return "Article not found + ", 404
