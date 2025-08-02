@@ -3,8 +3,10 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for
 import openai
 import uuid
 import datetime
+import dotenv
 
-openai.api_key = "YOUR_OPENAI_KEY"
+dotenv.load_dotenv()
+
 
 app = Flask(__name__)
 
