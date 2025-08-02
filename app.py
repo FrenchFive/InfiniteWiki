@@ -150,8 +150,8 @@ def article(token):
         if len(info_text) == 0:
             info_text = gen_article(token, name, "user")  # Generate article if it doesn't exist
 
-        info_text = gen_links(article[3])
-        return render_template('index.html', wiki_title=name, wiki_article=article)
+        info_text = gen_links(info_text)
+        return render_template('index.html', wiki_title=name, wiki_article=info_text)
     else:
         return "Article not found + ", 404
 
