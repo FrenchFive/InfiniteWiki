@@ -9,6 +9,7 @@ import os
 import re
 import tqdm
 import spacy
+import multiprocessing
 
 NLP = spacy.load("en_core_web_sm")
 
@@ -33,29 +34,56 @@ def check_tokens(words):
             li_unknown.append(word)
 
     conn.close()
-    
+
     return li_unknown
+
+def _process_chunk(chunk):
+    """Process a chunk of words and return rows and mappings."""
+    rows = []
+    mapping = {}
+    for word in chunk:
+        pointer_token, pointer = check_pointer(word)
+        if pointer_token == 0:
+            token = generate_token(word)
+            mapping[word] = token
+            rows.append((token, word, 0))
+        else:
+            mapping[word] = pointer_token
+            rows.append((pointer_token, pointer, 0))
+            rows.append((pointer_token, word, 1))
+    return rows, mapping
+
+
+def _chunkify(lst, n):
+    """Split *lst* into *n* nearly equal chunks."""
+    k, m = divmod(len(lst), n)
+    return [lst[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
+
 
 def tokenize(words):
     """Tokenize the words and add them to the database."""
+    if not words:
+        return
+
+    # Determine number of chunks (4 or 5 when possible)
+    num_chunks = 5 if len(words) >= 5 else (4 if len(words) >= 4 else len(words))
+    chunks = _chunkify(words, num_chunks)
+
+    with multiprocessing.Pool(processes=num_chunks) as pool:
+        chunk_results = pool.map(_process_chunk, chunks)
+
+    rows = []
+    token_map = {}
+    for chunk_rows, mapping in chunk_results:
+        rows.extend(chunk_rows)
+        token_map.update(mapping)
+
     conn = sqlite3.connect('wiki.db')
     cursor = conn.cursor()
-    
-    for word in tqdm.tqdm(words, desc="Tokenizing words"):
-        pointer_token, pointer = check_pointer(word)  # Make sure the word doesnt need to point to another word
-        if pointer_token == 0:
-            token = generate_token(word)  # Generate a token for the word
-            cursor.execute('INSERT OR IGNORE INTO articles (token, name) VALUES (?, ?)', (token, word))
-            conn.commit()
-        else:
-            cursor.execute('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', (pointer_token, pointer, 0))
-            conn.commit()
-            cursor.execute('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', (pointer_token, word, 1))
-            conn.commit()
-            
-    
+    cursor.executemany('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', rows)
     conn.commit()
     conn.close()
+    return token_map
 
 def linkenize(words):
     html = re.compile('<.*?>|&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});')
