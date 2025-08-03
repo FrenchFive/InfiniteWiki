@@ -182,29 +182,7 @@ def generate_article(token, name, user):
 def check_pointer(word):
     doc = NLP(word)
     for token in doc:
-        if token.is_oov == True and token.lemma_ == word:
-            pointer = "<UNK>"
-        else:
-            pointer = token.lemma_.lower()
-
-    if pointer == "<UNK>":
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-
-        response = client.responses.create(
-            model="gpt-4.1-nano-2025-04-14",
-            input=[
-                {
-                    "role": "system",
-                    "content": "If the word is plural, output the singular word. If the word is a verb, output the unconjugated form. ONLY OUTPUT 1 WORD."
-                },
-                {
-                    "role": "user",
-                    "content": f"{word}"
-                }
-            ]
-        )
-
-        pointer = response.output_text.strip().lower()
+        pointer = token.lemma_.lower()
     
     pointer = re.sub(r'[^a-z0-9]', '', pointer)  # Clean the pointer word
     if word == pointer:
