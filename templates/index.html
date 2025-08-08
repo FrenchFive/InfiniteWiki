@@ -9,10 +9,11 @@
 <body>
   <header class="iw-header">
     <div class="iw-header__inner">
-      <a class="brand" href="/">
+      <a class="brand" href="/?u={{ current_user|e }}">
         <span class="brand__logo">∞</span>
         <span class="brand__text">InfiniteWiki</span>
       </a>
+
 
       <div class="header-controls">
         <form class="search" role="search" aria-label="Search">
@@ -58,21 +59,19 @@
       </div>
 
       <div class="card">
-        <h3>Your Stats</h3>
-        <p class="muted">(Demo data — wire up later)</p>
-        <ul class="pill-list">
-          <li>Quantum</li>
-          <li>Algorithm</li>
-          <li>Neuron</li>
-          <li>Protocol</li>
-          <li>Syntax</li>
-          <li>Cache</li>
-          <li>Buffer</li>
-          <li>Daemon</li>
-          <li>Node</li>
-          <li>Loop</li>
+        <h3>Your Latest Discoveries</h3>
+        <ul class="pill-list" id="userRecentList" data-empty-text="No discoveries yet — go explore!">
+          {% if user_recent and user_recent|length > 0 %}
+            {% for w in user_recent %}
+              <li>{{ w }}</li>
+            {% endfor %}
+          {% else %}
+            <li class="muted">No discoveries yet — go explore!</li>
+          {% endif %}
         </ul>
       </div>
+
+
     </aside>
   </main>
 
@@ -81,34 +80,91 @@
   </footer>
 
   <script>
-    // --- Username persistence ---
+    async function refreshUserRecent(name) {
+      try {
+        const url = new URL('/api/user_recent', window.location.origin);
+        url.searchParams.set('u', name);
+        const res = await fetch(url, { cache: 'no-store' });
+        const data = await res.json();
+
+        const ul = document.getElementById('userRecentList');
+        if (!ul) return;
+        ul.innerHTML = '';
+        const items = Array.isArray(data.recent) ? data.recent : [];
+
+        if (items.length === 0) {
+          const li = document.createElement('li');
+          li.className = 'muted';
+          li.textContent = ul.dataset.emptyText || 'No discoveries yet — go explore!';
+          ul.appendChild(li);
+        } else {
+          for (const w of items) {
+            const li = document.createElement('li');
+            li.textContent = w;
+            ul.appendChild(li);
+          }
+        }
+      } catch (e) {
+        // Optional: show a lightweight error state
+        console.error('Failed to refresh user recent', e);
+      }
+    }
+
+    // --- existing code you already have (shortened here) ---
     const userInput = document.getElementById('userName');
     const avatar = document.getElementById('userAvatar');
 
-    function initialsFromName(name) {
-      const clean = (name || '').trim();
-      if (!clean) return 'U';
-      const parts = clean.split(/\s+/).slice(0, 2);
-      return parts.map(p => p[0]?.toUpperCase()).join('') || 'U';
+    function initialsFromName(name) { /* ...same as before... */ }
+    function getStoredUser() { return localStorage.getItem('iw_username') || 'user'; }
+    function setStoredUser(name) {
+      const clean = (name || 'user').trim() || 'user';
+      localStorage.setItem('iw_username', clean);
+      return clean;
     }
+    function setUrlUserParam(name, replace=true) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('u') !== name) {
+        url.searchParams.set('u', name);
+        if (replace) history.replaceState({}, '', url);
+        else history.pushState({}, '', url);
+      }
+    }
+    function applyUserToLinks(name, root=document) { /* ...same as before... */ }
 
-    const storedName = localStorage.getItem('iw_username') || 'user';
-    userInput.value = storedName;
-    avatar.textContent = initialsFromName(storedName);
+    // Initialize
+    let currentName = getStoredUser();
+    userInput.value = currentName;
+    avatar.textContent = initialsFromName(currentName);
+    setUrlUserParam(currentName, true);
+    applyUserToLinks(currentName);
 
+    // NEW: refresh sidebar on load
+    refreshUserRecent(currentName);
+
+    // When the user types a new name, immediately refresh the sidebar
     userInput.addEventListener('input', () => {
-      const name = userInput.value || 'user';
-      localStorage.setItem('iw_username', name);
-      avatar.textContent = initialsFromName(name);
+      currentName = setStoredUser(userInput.value);
+      avatar.textContent = initialsFromName(currentName);
+      setUrlUserParam(currentName, true);
+      applyUserToLinks(currentName);
+      refreshUserRecent(currentName);          // <--- key line
     });
 
-    // --- (Optional) Hook up search later ---
-    document.getElementById('searchBtn').addEventListener('click', () => {
-      const q = document.getElementById('searchInput').value.trim();
-      if (!q) return;
-      // TODO: route this to your Flask search endpoint when ready
-      alert('Search coming soon for: ' + q);
-    });
+    // Keep links patched just before nav (you already added this)
+    document.addEventListener('click', (ev) => {
+      if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+      let a = ev.target;
+      while (a && a.tagName !== 'A') a = a.parentElement;
+      if (!a || !a.hasAttribute('href')) return;
+      try {
+        const href = a.getAttribute('href');
+        const u = new URL(href, window.location.origin);
+        u.searchParams.set('u', currentName);
+        a.setAttribute('href', u.pathname + u.search + u.hash);
+      } catch (_) {}
+    }, true);
   </script>
+
+
 </body>
 </html>

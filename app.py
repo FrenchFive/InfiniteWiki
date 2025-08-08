@@ -10,6 +10,8 @@ import re
 import tqdm
 import spacy
 import multiprocessing
+import urllib.parse
+
 
 NLP = spacy.load("en_core_web_sm")
 
@@ -19,6 +21,32 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
 app = Flask(__name__)
+
+def current_user():
+    u = (request.args.get('u') or '').strip()
+    return u if u else 'user'
+
+def get_user_recent(user, limit=10):
+    conn = sqlite3.connect('wiki.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        '''
+        SELECT name
+        FROM articles
+        WHERE pointer = 0
+          AND discovered_by = ?
+          AND info_text IS NOT NULL
+          AND info_text != ''
+        ORDER BY datetime(discovery_time) DESC
+        LIMIT ?
+        ''',
+        (user, limit)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [r["name"] for r in rows]
+
 
 def check_tokens(words):
     conn = sqlite3.connect('wiki.db')
@@ -85,7 +113,7 @@ def tokenize(words):
     conn.close()
     return token_map
 
-def linkenize(words):
+def linkenize(words, user):  
     html = re.compile('<.*?>|&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});')
     conn = sqlite3.connect('wiki.db')
     cursor = conn.cursor()
@@ -93,8 +121,8 @@ def linkenize(words):
     linkenized_words = []
     for word in words:
         word_clean = word.strip().lower()
-        word_clean = re.sub(html, '', word_clean)  # Remove HTML tags
-        word_clean = re.sub(r'[^a-z0-9]', '', word_clean)  # Clean the word
+        word_clean = re.sub(html, '', word_clean)
+        word_clean = re.sub(r'[^a-z0-9]', '', word_clean)
 
         if len(word_clean) == 0:
             linkenized_words.append(word)
@@ -102,24 +130,23 @@ def linkenize(words):
             cursor.execute('SELECT token FROM articles WHERE name = ?', (word_clean,))
             data = cursor.fetchone()
             if data:
-                token = data[0]
-                linkenized_words.append(f"<a href='/article/{token}'>{word}</a> ")
+                tok = data[0]
+                q_user = urllib.parse.quote(user)
+                linkenized_words.append(f"<a href='/article/{tok}?u={q_user}'>{word}</a> ")
             else:
-                # If the word is not found, keep it as is
                 linkenized_words.append(word)
 
     conn.close()
     return linkenized_words
 
+
 def generate_token(word):
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, word))
 
-def generate_links(text):
+def generate_links(text, user):   # <-- add user
     word_list = text.split()
-
     html = re.compile('<.*?>|&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});')
-    word_list_html = [re.sub(html, '', word) for word in word_list]  # Remove HTML tags
-
+    word_list_html = [re.sub(html, '', word) for word in word_list]
 
     word_list_cleaned = []
     for word in word_list_html:
@@ -134,10 +161,10 @@ def generate_links(text):
 
     tokenize(li_unknown)
 
-    link_list = linkenize(word_list)
-
+    link_list = linkenize(word_list, user)  # <-- pass user
     paragraph = " ".join(link_list)
     return paragraph
+
 
 def init_db():
     if os.path.exists('wiki.db'):
@@ -186,7 +213,7 @@ def generate_article(token, name, user):
             },
             {
                 "role": "system",
-                "content": "Use HTML formatting to structure the article. Do not include any links or references to external sources. Do not define the html no <head> or <body> tags nor <html> or <!DOCTYPE html>, maximum size should be h2. Do not include the title of the article, start with the introduction."
+                "content": "Use HTML formatting to structure the article. Do not include any links or references to external sources. No Javascript or CSS code only HTML. Do not define the html no <head> or <body> tags nor <html> or <!DOCTYPE html>, maximum size should be h2. Do not include the title of the article, start with the introduction."
             },
             {
                 "role": "user",
@@ -197,15 +224,39 @@ def generate_article(token, name, user):
 
     conn = sqlite3.connect('wiki.db')
     cursor = conn.cursor()
+
+    # Write the article text and bump visits.
+    # Mark discovery ONLY now (first generation), and NEVER earlier.
     cursor.execute('''
         UPDATE articles
-        SET info_text = ?, num_visits = num_visits + 1, discovered_by = ?, discovery_time = ?
-        WHERE token = ? and pointer = 0
-    ''', (response.output_text, user, datetime.datetime.now(), token))
+        SET
+            info_text = ?,
+            num_visits = num_visits + 1,
+            -- Only stamp discoverer if this is the first time the article is generated
+            discovered_by = CASE
+                WHEN (discovered_by = '' OR discovered_by IS NULL) THEN ?
+                ELSE discovered_by
+            END,
+            discovery_time = CASE
+                WHEN (discovery_time = '' OR discovery_time IS NULL) THEN ?
+                ELSE discovery_time
+            END
+        WHERE token = ? AND pointer = 0
+          AND (info_text = '' OR info_text IS NULL)  -- ensure it's truly first generation
+    ''', (response.output_text, user, datetime.datetime.now().isoformat(), token))
+
+    # If the article already existed (someone discovered before), still bump visits but don't take credit
+    if cursor.rowcount == 0:
+        cursor.execute('''
+            UPDATE articles
+            SET num_visits = num_visits + 1
+            WHERE token = ? AND pointer = 0
+        ''', (token,))
 
     conn.commit()
     conn.close()
     return response.output_text
+
 
 def check_pointer(word):
     doc = NLP(word)
@@ -255,20 +306,30 @@ def get_stats():
 @app.route('/')
 def index():
     conn = sqlite3.connect('wiki.db')
-    conn.row_factory = sqlite3.Row  # Enable dict-like access
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM articles WHERE id = ?', (1,))
     article = cursor.fetchone()
     conn.close()
 
-    info_text = generate_links(article["info_text"])
-    return render_template('index.html', wiki_title=article["name"], wiki_content=info_text, stats=get_stats())
+    user = current_user()
+    info_text = generate_links(article["info_text"], user)
+
+    return render_template(
+        'index.html',
+        wiki_title=article["name"],
+        wiki_content=info_text,
+        stats=get_stats(),
+        user_recent=get_user_recent(user),
+        current_user=user
+    )
 
 
 @app.route('/article/<token>')
 def article(token):
+    user = current_user()
     conn = sqlite3.connect('wiki.db')
-    conn.row_factory = sqlite3.Row  # Enable dict-like access
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM articles WHERE token = ? AND pointer = ?', (token, 0))
     article = cursor.fetchone()
@@ -280,12 +341,28 @@ def article(token):
         info_text = article["info_text"]
 
         if len(info_text) == 0:
-            info_text = generate_article(token, name, "user")  # Generate article if it doesn't exist
+            info_text = generate_article(token, name, user)
 
-        links = generate_links(info_text)
-        return render_template('index.html', wiki_title=name, wiki_content=links, stats=get_stats())
+        links = generate_links(info_text, user)
+        return render_template(
+            'index.html',
+            wiki_title=name,
+            wiki_content=links,
+            stats=get_stats(),
+            user_recent=get_user_recent(user),
+            current_user=user
+        )
     else:
         return "Article not found + ", 404
+
+@app.get('/api/user_recent')
+def api_user_recent():
+    user = current_user()  # reads ?u=...
+    return jsonify({
+        "user": user,
+        "recent": get_user_recent(user)
+    })
+
 
 
 if __name__ == '__main__':
