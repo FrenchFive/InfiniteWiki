@@ -178,7 +178,7 @@ def generate_article(token, name, user):
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
     response = client.responses.create(
-        model="gpt-4.1",
+        model="gpt-5-nano",
         input=[
             {
                 "role": "system",

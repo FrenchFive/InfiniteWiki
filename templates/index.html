@@ -1,44 +1,66 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>InfiniteWiki</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
+  <header class="iw-header">
+    <div class="iw-header__inner">
+      <a class="brand" href="/">
+        <span class="brand__logo">∞</span>
+        <span class="brand__text">InfiniteWiki</span>
+      </a>
 
-  <header>
-    <div class="site-name">InfiniteWiki</div>
+      <div class="header-controls">
+        <form class="search" role="search" aria-label="Search">
+          <input id="searchInput" type="search" placeholder="Search…" autocomplete="off" />
+          <button type="button" id="searchBtn" title="Search">Search</button>
+        </form>
 
-    <div class="search-bar">
-      <input type="text" placeholder="Rechercher...">
+        <div class="user">
+          <div class="user__avatar" id="userAvatar" aria-hidden="true">U</div>
+          <input id="userName" class="user__input" type="text" placeholder="user" aria-label="Your name" />
+        </div>
+      </div>
     </div>
   </header>
 
-  <main>
-    <div class="content">
-      <h2>{{ wiki_title }}</h2>
-      <p>
-        {{ wiki_content|safe }}
-      </p>
-    </div>
-
+  <main class="layout">
+    <section class="content">
+      <article class="article">
+        <h1 class="article__title">{{ wiki_title }}</h1>
+        <div class="article__body">
+          {{ wiki_content|safe }}
+        </div>
+      </article>
+    </section>
 
     <aside class="sidebar">
-        <br>
+      <div class="card">
+        <h3>Community</h3>
+        <div class="metrics">
+          <div class="metric">
+            <div class="metric__label">Words discovered</div>
+            <div class="metric__value">{{ stats["total_articles"] }}</div>
+          </div>
+          <div class="metric">
+            <div class="metric__label">Undiscovered</div>
+            <div class="metric__value">{{ stats["total_undiscovered"] }}</div>
+          </div>
+          <div class="metric">
+            <div class="metric__label">Top discoverer</div>
+            <div class="metric__value">{{ stats["most_active_user"] }}</div>
+          </div>
+        </div>
+      </div>
 
-        <h3>Community Stats: </h3>
-        <p><strong>Words discovered by community:</strong>{{ stats["total_articles"] }}</p>
-        <p><strong>Undiscovered words:</strong>{{ stats["total_undiscovered"] }}</p>
-        <p><strong>Top discoverer:</strong>{{ stats["most_active_user"] }}</p>
-
-        <br>
-
-        <h3>Your Stats: </h3>
-        <p><strong>Words you discovered:</strong> 15</p>
-        <h4>Last 10 you discovered:</h4>
-        <ul>
+      <div class="card">
+        <h3>Your Stats</h3>
+        <p class="muted">(Demo data — wire up later)</p>
+        <ul class="pill-list">
           <li>Quantum</li>
           <li>Algorithm</li>
           <li>Neuron</li>
@@ -50,12 +72,43 @@
           <li>Node</li>
           <li>Loop</li>
         </ul>
+      </div>
     </aside>
   </main>
 
-  <footer>
-    <p>&copy; By Five and Lalaulune</p>
+  <footer class="iw-footer">
+    <p>Made with ♥ by Five &amp; Lalaulune</p>
   </footer>
 
+  <script>
+    // --- Username persistence ---
+    const userInput = document.getElementById('userName');
+    const avatar = document.getElementById('userAvatar');
+
+    function initialsFromName(name) {
+      const clean = (name || '').trim();
+      if (!clean) return 'U';
+      const parts = clean.split(/\s+/).slice(0, 2);
+      return parts.map(p => p[0]?.toUpperCase()).join('') || 'U';
+    }
+
+    const storedName = localStorage.getItem('iw_username') || 'user';
+    userInput.value = storedName;
+    avatar.textContent = initialsFromName(storedName);
+
+    userInput.addEventListener('input', () => {
+      const name = userInput.value || 'user';
+      localStorage.setItem('iw_username', name);
+      avatar.textContent = initialsFromName(name);
+    });
+
+    // --- (Optional) Hook up search later ---
+    document.getElementById('searchBtn').addEventListener('click', () => {
+      const q = document.getElementById('searchInput').value.trim();
+      if (!q) return;
+      // TODO: route this to your Flask search endpoint when ready
+      alert('Search coming soon for: ' + q);
+    });
+  </script>
 </body>
 </html>
