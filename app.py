@@ -32,7 +32,7 @@ def get_user_recent(user, limit=10):
     cursor = conn.cursor()
     cursor.execute(
         '''
-        SELECT name
+        SELECT name, discovery_time
         FROM articles
         WHERE pointer = 0
           AND discovered_by = ?
@@ -45,7 +45,26 @@ def get_user_recent(user, limit=10):
     )
     rows = cursor.fetchall()
     conn.close()
-    return [r["name"] for r in rows]
+    return [{"name": r["name"], "discovery_time": r["discovery_time"]} for r in rows]
+
+def get_user_discovery_count(user):
+    """Get the number of discoveries made by a user."""
+    conn = sqlite3.connect('wiki.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        '''
+        SELECT COUNT(*) as count
+        FROM articles
+        WHERE pointer = 0
+          AND discovered_by = ?
+          AND info_text IS NOT NULL
+          AND info_text != ''
+        ''',
+        (user,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else 0
 
 
 def check_tokens(words):
@@ -187,7 +206,7 @@ def init_db():
     conn.commit()
     
 
-    # Inintialize the database with a default article
+    # Initialize the database with a default article
     name = "Infinite Wiki"
     token = generate_token(name)
     with open('default_article.txt', 'r', encoding='utf-8') as file:
@@ -196,7 +215,7 @@ def init_db():
     conn.execute('''
         INSERT OR IGNORE INTO articles (token, name, info_text, discovered_by, discovery_time)
         VALUES (?, ?, ?, ?, ?)
-    ''', (token, name, text, "Lau&Five", "TODAY"))
+    ''', (token, name, text, "Lau&Five", datetime.datetime.now().isoformat()))
     conn.commit()
 
     conn.close()
@@ -303,6 +322,22 @@ def get_stats():
 
     return stat
 
+def get_article_discovery_info(token):
+    """Get discovery information for an article."""
+    conn = sqlite3.connect('wiki.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT discovered_by, discovery_time FROM articles WHERE token = ? AND pointer = 0', (token,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return {
+            "discovered_by": row["discovered_by"] or None,
+            "discovery_time": row["discovery_time"] or None
+        }
+    return {"discovered_by": None, "discovery_time": None}
+
 @app.route('/')
 def index():
     conn = sqlite3.connect('wiki.db')
@@ -314,6 +349,7 @@ def index():
 
     user = current_user()
     info_text = generate_links(article["info_text"], user)
+    discovery_info = get_article_discovery_info(article["token"])
 
     return render_template(
         'index.html',
@@ -321,7 +357,9 @@ def index():
         wiki_content=info_text,
         stats=get_stats(),
         user_recent=get_user_recent(user),
-        current_user=user
+        current_user=user,
+        discovery_info=discovery_info,
+        user_discovery_count=get_user_discovery_count(user)
     )
 
 
@@ -341,6 +379,7 @@ def article(token):
     name = row["name"]
     info_text = (row["info_text"] or "")
     needs_generation = (info_text.strip() == "")
+    discovery_info = get_article_discovery_info(token)
 
     if not needs_generation:
         # Render immediately
@@ -353,18 +392,25 @@ def article(token):
             user_recent=get_user_recent(user),
             current_user=user,
             article_token=token,
-            needs_generation=False
+            needs_generation=False,
+            discovery_info=discovery_info,
+            user_discovery_count=get_user_discovery_count(user)
         )
 
     # Render shell with loader; JS will fetch and swap in content
     loader_shell = """
-      <div id="articleLoader" class="discovery" aria-live="polite">
-        <div class="discovery__icon" aria-hidden="true">💡</div>
-        <h2 class="discovery__title">New discovery by <span id="discoveryUser"></span>!</h2>
-        <p class="discovery__text">
-          Generating the article
-          <span class="dots"><span>.</span><span>.</span><span>.</span></span>
-        </p>
+      <div id="articleLoader" class="discovery-card" aria-live="polite">
+        <div class="discovery-card__content">
+          <div class="discovery-card__icon" aria-hidden="true">💡</div>
+          <h2 class="discovery-card__title">New discovery by <span id="discoveryUser"></span>!</h2>
+          <p class="discovery-card__date" id="discoveryDate"></p>
+          <div class="discovery-card__status">
+            <p class="discovery-card__text" id="loadingStatus">
+              Searching for the article
+              <span class="dots"><span>.</span><span>.</span><span>.</span></span>
+            </p>
+          </div>
+        </div>
       </div>
       <div id="articleContent" hidden></div>
     """
@@ -377,7 +423,9 @@ def article(token):
         user_recent=get_user_recent(user),
         current_user=user,
         article_token=token,
-        needs_generation=True
+        needs_generation=True,
+        discovery_info=discovery_info,
+        user_discovery_count=get_user_discovery_count(user)
     )
 
 
@@ -414,12 +462,14 @@ def api_article_generate(token):
 
     # Linkify with current user
     html = generate_links(info_text, user)
+    discovery_info = get_article_discovery_info(token)
 
     return jsonify({
         "ok": True,
         "title": name,
         "html": html,
-        "was_discovery": was_empty
+        "was_discovery": was_empty,
+        "discovery_info": discovery_info
     })
 
 

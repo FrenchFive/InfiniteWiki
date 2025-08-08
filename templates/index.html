@@ -41,6 +41,32 @@
 
     <aside class="sidebar">
       <div class="card">
+        <h3>Article Info</h3>
+        <div class="discovery-info">
+          <div class="discovery-info__item">
+            <div class="discovery-info__label">Discovered by</div>
+            <div class="discovery-info__value" id="discoveryByDisplay">
+              {% if discovery_info and discovery_info.discovered_by %}
+                {{ discovery_info.discovered_by }}
+              {% else %}
+                <span class="muted">Not yet discovered</span>
+              {% endif %}
+            </div>
+          </div>
+          <div class="discovery-info__item">
+            <div class="discovery-info__label">Date</div>
+            <div class="discovery-info__value" id="discoveryDateDisplay">
+              {% if discovery_info and discovery_info.discovery_time %}
+                {{ discovery_info.discovery_time }}
+              {% else %}
+                <span class="muted">Not yet discovered</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>Community</h3>
         <div class="metrics">
           <div class="metric">
@@ -59,19 +85,26 @@
       </div>
 
       <div class="card">
-        <h3>Your Latest Discoveries</h3>
-        <ul class="pill-list" id="userRecentList" data-empty-text="No discoveries yet — go explore!">
-          {% if user_recent and user_recent|length > 0 %}
-            {% for w in user_recent %}
-              <li>{{ w }}</li>
-            {% endfor %}
-          {% else %}
-            <li class="muted">No discoveries yet — go explore!</li>
-          {% endif %}
-        </ul>
+        <h3>Your Discoveries</h3>
+        <div class="user-stats">
+          <div class="user-stat">
+            <div class="user-stat__label">Total discoveries</div>
+            <div class="user-stat__value">{{ user_discovery_count }}</div>
+          </div>
+        </div>
+        <div class="recent-discoveries">
+          <div class="recent-discoveries__label">Latest discoveries</div>
+          <ul class="pill-list" id="userRecentList" data-empty-text="No discoveries yet — go explore!">
+            {% if user_recent and user_recent|length > 0 %}
+              {% for item in user_recent %}
+                <li>{{ item.name }}</li>
+              {% endfor %}
+            {% else %}
+              <li class="muted">No discoveries yet — go explore!</li>
+            {% endif %}
+          </ul>
+        </div>
       </div>
-
-
     </aside>
   </main>
 
@@ -133,9 +166,9 @@
           li.textContent = ul.dataset.emptyText || 'No discoveries yet — go explore!';
           ul.appendChild(li);
         } else {
-          for (const w of items) {
+          for (const item of items) {
             const li = document.createElement('li');
-            li.textContent = w;
+            li.textContent = item.name || item;
             ul.appendChild(li);
           }
         }
@@ -180,18 +213,29 @@
     const ARTICLE_TOKEN = {{ (article_token | default('')) | tojson }};
     const NEEDS_GEN = {{ (needs_generation | default(false)) | tojson }};
 
-    // Put the current username into the congratulation text
+    // Put the current username into the congratulation text and set the date
     (function initDiscoveryHeader() {
       const el = document.getElementById('discoveryUser');
+      const dateEl = document.getElementById('discoveryDate');
       if (el) {
         const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
         el.textContent = name;
+      }
+      if (dateEl) {
+        const now = new Date();
+        dateEl.textContent = now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
       }
     })();
 
     async function fetchAndRenderArticle() {
       if (!ARTICLE_TOKEN) return;
       const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
+
+      // Update loading status to "Searching for the article"
+      const loadingStatus = document.getElementById('loadingStatus');
+      if (loadingStatus) {
+        loadingStatus.innerHTML = 'Searching for the article<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+      }
 
       // Ensure URL and links carry ?u=
       setUrlUserParam(name, true);
@@ -211,6 +255,11 @@
         return;
       }
 
+      // Update loading status to "Tokenizing new words"
+      if (loadingStatus) {
+        loadingStatus.innerHTML = 'Tokenizing new words<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+      }
+
       // Swap the HTML in
       const loader = document.getElementById('articleLoader');
       const content = document.getElementById('articleContent');
@@ -220,12 +269,41 @@
       }
       if (loader) loader.remove();
 
+      // Update discovery information in sidebar if available
+      if (data.discovery_info) {
+        const discoveryDateDisplay = document.getElementById('discoveryDateDisplay');
+        const discoveryByDisplay = document.getElementById('discoveryByDisplay');
+        
+        if (discoveryDateDisplay) {
+          if (data.discovery_info.discovery_time) {
+            const date = new Date(data.discovery_info.discovery_time);
+            discoveryDateDisplay.textContent = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+          } else {
+            discoveryDateDisplay.innerHTML = '<span class="muted">Not yet discovered</span>';
+          }
+        }
+        
+        if (discoveryByDisplay) {
+          if (data.discovery_info.discovered_by) {
+            discoveryByDisplay.textContent = data.discovery_info.discovered_by;
+          } else {
+            discoveryByDisplay.innerHTML = '<span class="muted">Not yet discovered</span>';
+          }
+        }
+      }
+
       // Because we injected fresh links, make sure they carry ?u=
       applyUserToLinks(name);
 
-      // If this was a new discovery, refresh the sidebar list
+      // If this was a new discovery, refresh the sidebar list and update user stats
       if (data.was_discovery) {
         refreshUserRecent(name);
+        // Update user discovery count
+        const userStatValue = document.querySelector('.user-stat__value');
+        if (userStatValue) {
+          const currentCount = parseInt(userStatValue.textContent) || 0;
+          userStatValue.textContent = currentCount + 1;
+        }
       }
     }
 
