@@ -490,13 +490,15 @@ def api_article_generate(token):
     # If first time, generate + credit discoverer
     if was_empty:
         info_text = generate_article(token, name, user)
+        # For new discoveries, don't increment visits again since generate_article already set it to 1
+        discovery_info = get_article_discovery_info(token)
+    else:
+        # For existing articles, increment visits
+        increment_article_visits(token)
+        discovery_info = get_article_discovery_info(token)
 
     # Linkify with current user
     html = generate_links(info_text, user)
-    
-    # Increment visits and get updated info
-    increment_article_visits(token)
-    discovery_info = get_article_discovery_info(token)
 
     return jsonify({
         "ok": True,
