@@ -628,29 +628,42 @@ def api_stats():
 
 @app.get('/api/search')
 def api_search():
-    """API endpoint for searching discovered articles."""
+    """API endpoint for searching discovered articles with suggestions."""
     query = request.args.get('q', '').strip().lower()
     if not query:
-        return jsonify({"results": []})
+        return jsonify({"results": [], "suggestion": None})
     
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         
-        # Search for discovered articles that match the query
+        # Search for discovered articles that match the query, ordered by discovery time (oldest first)
         cursor.execute('''
-            SELECT name, token
+            SELECT name, token, discovery_time
             FROM articles
             WHERE pointer = 0 
               AND info_text != '' 
               AND info_text IS NOT NULL
               AND LOWER(name) LIKE ?
-            ORDER BY name
+            ORDER BY 
+              CASE 
+                WHEN LOWER(name) = ? THEN 0  -- Exact match first
+                WHEN LOWER(name) LIKE ? THEN 1  -- Starts with query
+                ELSE 2  -- Contains query
+              END,
+              discovery_time ASC  -- Oldest discoveries first
             LIMIT 10
-        ''', (f'%{query}%',))
+        ''', (f'%{query}%', query, f'{query}%'))
         
         results = [{"name": row["name"], "token": row["token"]} for row in cursor.fetchall()]
-        return jsonify({"results": results})
+        
+        # Get the first suggestion (oldest match)
+        suggestion = results[0] if results else None
+        
+        return jsonify({
+            "results": results,
+            "suggestion": suggestion
+        })
     finally:
         return_db_connection(conn)
 

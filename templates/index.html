@@ -16,10 +16,11 @@
 
 
       <div class="header-controls">
-        <form class="search" role="search" aria-label="Search">
+        <div class="search-container">
           <input id="searchInput" type="search" placeholder="Search…" autocomplete="off" />
+          <div id="searchSuggestion" class="search-suggestion" style="display: none;"></div>
           <button type="button" id="searchBtn" title="Search">Search</button>
-        </form>
+        </div>
 
         <div class="user">
           <div class="user__avatar" id="userAvatar" aria-hidden="true">U</div>
@@ -372,6 +373,128 @@
         fetchAndRenderArticle();
       }
     }
+
+    // Search functionality with suggestions
+    const searchInput = document.getElementById('searchInput');
+    const searchSuggestion = document.getElementById('searchSuggestion');
+    const searchBtn = document.getElementById('searchBtn');
+    let searchTimeout = null;
+    let currentSuggestion = null;
+
+    async function performSearch(query) {
+      if (!query.trim()) {
+        hideSuggestion();
+        return;
+      }
+
+      try {
+        const url = new URL('/api/search', window.location.origin);
+        url.searchParams.set('q', query);
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.suggestion) {
+          showSuggestion(data.suggestion, query);
+        } else {
+          hideSuggestion();
+        }
+      } catch (error) {
+        console.error('Search error:', error);
+        hideSuggestion();
+      }
+    }
+
+    function showSuggestion(suggestion, query) {
+      currentSuggestion = suggestion;
+      searchSuggestion.innerHTML = `
+        <div class="suggestion-text">${suggestion.name}</div>
+        <div class="suggestion-hint">Press Tab to complete, or click to visit</div>
+      `;
+      searchSuggestion.style.display = 'block';
+    }
+
+    function hideSuggestion() {
+      searchSuggestion.style.display = 'none';
+      currentSuggestion = null;
+    }
+
+    function navigateToSuggestion() {
+      if (currentSuggestion) {
+        const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
+        window.location.href = `/article/${currentSuggestion.token}?u=${encodeURIComponent(name)}`;
+      }
+    }
+
+    function completeWithSuggestion() {
+      if (currentSuggestion) {
+        searchInput.value = currentSuggestion.name;
+        hideSuggestion();
+      }
+    }
+
+    // Search input event listeners
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value;
+      
+      // Clear existing timeout
+      if (searchTimeout) {
+        clearTimeout(searchTimeout);
+      }
+
+      // Set new timeout for debounced search
+      searchTimeout = setTimeout(() => {
+        performSearch(query);
+      }, 300);
+    });
+
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab' && currentSuggestion) {
+        e.preventDefault();
+        completeWithSuggestion();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (currentSuggestion) {
+          navigateToSuggestion();
+        } else {
+          // Perform search with current input
+          const query = searchInput.value.trim();
+          if (query) {
+            performSearch(query);
+          }
+        }
+      } else if (e.key === 'Escape') {
+        hideSuggestion();
+        searchInput.blur();
+      }
+    });
+
+    // Search suggestion click
+    searchSuggestion.addEventListener('click', () => {
+      navigateToSuggestion();
+    });
+
+    // Search button click
+    searchBtn.addEventListener('click', () => {
+      const query = searchInput.value.trim();
+      if (query) {
+        performSearch(query);
+      }
+    });
+
+    // Hide suggestion when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!searchInput.contains(e.target) && !searchSuggestion.contains(e.target)) {
+        hideSuggestion();
+      }
+    });
+
+    // Hide suggestion when input loses focus
+    searchInput.addEventListener('blur', () => {
+      // Small delay to allow for suggestion clicks
+      setTimeout(() => {
+        hideSuggestion();
+      }, 100);
+    });
   </script>
 
 
