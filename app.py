@@ -7,31 +7,150 @@ import datetime
 import dotenv
 import os
 import re
-import tqdm
 import spacy
 import multiprocessing
 import urllib.parse
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import time
 
-
-NLP = spacy.load("en_core_web_sm")
-
+# Load environment
 dotenv.load_dotenv()
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-
+# Initialize Flask app
 app = Flask(__name__)
 
+# Global NLP model (load once)
+NLP = spacy.load("en_core_web_sm")
+
+# Thread-local storage for database connections
+thread_local = threading.local()
+
+# Cache for frequently accessed data
+CACHE_DURATION = 300  # 5 minutes
+cache = {}
+cache_lock = threading.Lock()
+
+def get_db_connection():
+    """Get thread-local database connection."""
+    if not hasattr(thread_local, 'connection'):
+        thread_local.connection = sqlite3.connect('wiki.db')
+        thread_local.connection.row_factory = sqlite3.Row
+    return thread_local.connection
+
+def close_db_connection():
+    """Close thread-local database connection."""
+    if hasattr(thread_local, 'connection'):
+        thread_local.connection.close()
+        delattr(thread_local, 'connection')
+
+def cache_get(key):
+    """Get value from cache."""
+    with cache_lock:
+        if key in cache:
+            timestamp, value = cache[key]
+            if time.time() - timestamp < CACHE_DURATION:
+                return value
+            else:
+                del cache[key]
+    return None
+
+def cache_set(key, value):
+    """Set value in cache."""
+    with cache_lock:
+        cache[key] = (time.time(), value)
+
 def current_user():
+    """Get current user from request parameters."""
     u = (request.args.get('u') or '').strip()
     return u if u else 'user'
 
-def get_user_recent(user, limit=10):
-    conn = sqlite3.connect('wiki.db')
-    conn.row_factory = sqlite3.Row
+def generate_token(word):
+    """Generate UUID token for a word."""
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, word))
+
+@lru_cache(maxsize=1000)
+def clean_word(word):
+    """Clean and normalize a word for processing."""
+    # Remove HTML tags
+    word = re.sub(r'<[^>]+>', '', word)
+    # Remove special characters and convert to lowercase
+    word = re.sub(r'[^a-z0-9]', '', word.lower())
+    return word
+
+def batch_process_words(words, batch_size=100):
+    """Process words in batches for better performance."""
+    results = []
+    for i in range(0, len(words), batch_size):
+        batch = words[i:i + batch_size]
+        results.extend(process_word_batch(batch))
+    return results
+
+def process_word_batch(words):
+    """Process a batch of words efficiently."""
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        '''
+    
+    # Clean all words at once
+    cleaned_words = [clean_word(word) for word in words]
+    cleaned_words = [w for w in cleaned_words if w]
+    
+    if not cleaned_words:
+        return []
+    
+    # Use a single query to check all words
+    placeholders = ','.join(['?' for _ in cleaned_words])
+    cursor.execute(f'SELECT name, token FROM articles WHERE name IN ({placeholders})', cleaned_words)
+    existing = {row['name']: row['token'] for row in cursor.fetchall()}
+    
+    # Find missing words
+    missing_words = [word for word in cleaned_words if word not in existing]
+    
+    # Generate tokens for missing words
+    new_tokens = {word: generate_token(word) for word in missing_words}
+    
+    # Insert new words in batch
+    if new_tokens:
+        insert_data = [(token, word, 0) for word, token in new_tokens.items()]
+        cursor.executemany('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', insert_data)
+        conn.commit()
+    
+    # Combine existing and new tokens
+    all_tokens = {**existing, **new_tokens}
+    
+    return [(word, all_tokens.get(clean_word(word), None)) for word in words]
+
+def generate_links_optimized(text, user):
+    """Optimized link generation with batch processing."""
+    # Split text into words
+    words = text.split()
+    
+    # Process words in batches
+    word_token_pairs = batch_process_words(words)
+    
+    # Generate links efficiently
+    linkenized_words = []
+    for original_word, token in word_token_pairs:
+        if token:
+            q_user = urllib.parse.quote(user)
+            linkenized_words.append(f'<a href="/article/{token}?u={q_user}">{original_word}</a>')
+        else:
+            linkenized_words.append(original_word)
+    
+    return ' '.join(linkenized_words)
+
+def get_user_recent(user, limit=10):
+    """Get user's recent discoveries with caching."""
+    cache_key = f"user_recent_{user}_{limit}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
         SELECT name, discovery_time, token
         FROM articles
         WHERE pointer = 0
@@ -40,303 +159,93 @@ def get_user_recent(user, limit=10):
           AND info_text != ''
         ORDER BY datetime(discovery_time) DESC
         LIMIT ?
-        ''',
-        (user, limit)
-    )
+    ''', (user, limit))
+    
     rows = cursor.fetchall()
-    conn.close()
-    return [{"name": r["name"], "discovery_time": r["discovery_time"], "token": r["token"]} for r in rows]
+    result = [{"name": r["name"], "discovery_time": r["discovery_time"], "token": r["token"]} for r in rows]
+    
+    cache_set(cache_key, result)
+    return result
 
 def get_user_discovery_count(user):
-    """Get the number of discoveries made by a user."""
-    conn = sqlite3.connect('wiki.db')
+    """Get user's discovery count with caching."""
+    cache_key = f"user_count_{user}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        '''
+    cursor.execute('''
         SELECT COUNT(*) as count
         FROM articles
         WHERE pointer = 0
           AND discovered_by = ?
           AND info_text IS NOT NULL
           AND info_text != ''
-        ''',
-        (user,)
-    )
+    ''', (user,))
+    
     result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else 0
-
-
-def check_tokens(words):
-    conn = sqlite3.connect('wiki.db')
-    li_tokenized = []
-    li_unknown = []
-    cursor = conn.cursor()
-    for word in words:
-        cursor.execute('SELECT token FROM articles WHERE name = ?', (word,))
-        data = cursor.fetchone()
-        if data:
-            li_tokenized.append(word)
-        else:
-            li_unknown.append(word)
-
-    conn.close()
-
-    return li_unknown
-
-def _process_chunk(chunk):
-    """Process a chunk of words and return rows and mappings."""
-    rows = []
-    mapping = {}
-    for word in chunk:
-        pointer_token, pointer = check_pointer(word)
-        if pointer_token == 0:
-            token = generate_token(word)
-            mapping[word] = token
-            rows.append((token, word, 0))
-        else:
-            mapping[word] = pointer_token
-            rows.append((pointer_token, pointer, 0))
-            rows.append((pointer_token, word, 1))
-    return rows, mapping
-
-
-def _chunkify(lst, n):
-    """Split *lst* into *n* nearly equal chunks."""
-    k, m = divmod(len(lst), n)
-    return [lst[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
-
-
-def tokenize(words):
-    """Tokenize the words and add them to the database."""
-    if not words:
-        return
-
-    # Determine number of chunks (4 or 5 when possible)
-    num_chunks = 5 if len(words) >= 5 else (4 if len(words) >= 4 else len(words))
-    chunks = _chunkify(words, num_chunks)
-
-    with multiprocessing.Pool(processes=num_chunks) as pool:
-        chunk_results = pool.map(_process_chunk, chunks)
-
-    rows = []
-    token_map = {}
-    for chunk_rows, mapping in chunk_results:
-        rows.extend(chunk_rows)
-        token_map.update(mapping)
-
-    conn = sqlite3.connect('wiki.db')
-    cursor = conn.cursor()
-    cursor.executemany('INSERT OR IGNORE INTO articles (token, name, pointer) VALUES (?, ?, ?)', rows)
-    conn.commit()
-    conn.close()
-    return token_map
-
-def linkenize(words, user):  
-    html = re.compile('<.*?>|&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});')
-    conn = sqlite3.connect('wiki.db')
-    cursor = conn.cursor()
+    count = result[0] if result else 0
     
-    linkenized_words = []
-    for word in words:
-        word_clean = word.strip().lower()
-        word_clean = re.sub(html, '', word_clean)
-        word_clean = re.sub(r'[^a-z0-9]', '', word_clean)
-
-        if len(word_clean) == 0:
-            linkenized_words.append(word)
-        else:
-            cursor.execute('SELECT token FROM articles WHERE name = ?', (word_clean,))
-            data = cursor.fetchone()
-            if data:
-                tok = data[0]
-                q_user = urllib.parse.quote(user)
-                linkenized_words.append(f"<a href='/article/{tok}?u={q_user}'>{word}</a> ")
-            else:
-                linkenized_words.append(word)
-
-    conn.close()
-    return linkenized_words
-
-
-def generate_token(word):
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, word))
-
-def generate_links(text, user):   # <-- add user
-    word_list = text.split()
-    html = re.compile('<.*?>|&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});')
-    word_list_html = [re.sub(html, '', word) for word in word_list]
-
-    word_list_cleaned = []
-    for word in word_list_html:
-        word = word.strip().lower()
-        word = re.sub(r'[^a-z0-9]', '', word)
-        if len(word) > 0:
-            word_list_cleaned.append(word)
-    cleaned_list = list(set(word_list_cleaned))
-    li_unknown = check_tokens(cleaned_list)
-    print(f"Tokenized words : {len(cleaned_list) - len(li_unknown)}")
-    print(f"Unknown words : {len(li_unknown)}")
-
-    tokenize(li_unknown)
-
-    link_list = linkenize(word_list, user)  # <-- pass user
-    paragraph = " ".join(link_list)
-    return paragraph
-
-
-def init_db():
-    if os.path.exists('wiki.db'):
-        return
-
-    conn = sqlite3.connect('wiki.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS articles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                token TEXT,
-                name TEXT UNIQUE,
-                pointer INTEGER DEFAULT 0,
-                info_text TEXT DEFAULT '',
-                num_visits INTEGER DEFAULT 0,
-                discovered_by TEXT DEFAULT '',
-                discovery_time TEXT DEFAULT ''
-            )
-    ''')
-    conn.commit()
-    
-
-    # Initialize the database with a default article
-    name = "Infinite Wiki"
-    token = generate_token(name)
-    with open('default_article.txt', 'r', encoding='utf-8') as file:
-        text = file.read()
-
-    conn.execute('''
-        INSERT OR IGNORE INTO articles (token, name, info_text, discovered_by, discovery_time)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (token, name, text, "Lau&Five", datetime.datetime.now().isoformat()))
-    conn.commit()
-
-    conn.close()
-
-def generate_article(token, name, user):
-    client = openai.OpenAI(api_key=OPENAI_API_KEY)
-
-    response = client.responses.create(
-        model="gpt-5-nano",
-        input=[
-            {
-                "role": "system",
-                "content": "You are an expert in creating detailed articles for a wiki (at least 500 words). Create different paragraphs starting with Introduction and then whatever is fit. Only output the article text without any additional commentary. Be creative and dont hesitate to invent new information if necessary."
-            },
-            {
-                "role": "system",
-                "content": "Use HTML formatting to structure the article. Do not include any links or references to external sources. No Javascript or CSS code only HTML. Do not define the html no <head> or <body> tags nor <html> or <!DOCTYPE html>, maximum size should be h2. Do not include the title of the article, start with the introduction."
-            },
-            {
-                "role": "user",
-                "content": f"Create a detailed article about {name}."
-            }
-        ],
-    )
-
-    conn = sqlite3.connect('wiki.db')
-    cursor = conn.cursor()
-
-    # Write the article text and set initial visit count to 1 for new discoveries.
-    # Mark discovery ONLY now (first generation), and NEVER earlier.
-    cursor.execute('''
-        UPDATE articles
-        SET
-            info_text = ?,
-            num_visits = 1,
-            -- Only stamp discoverer if this is the first time the article is generated
-            discovered_by = CASE
-                WHEN (discovered_by = '' OR discovered_by IS NULL) THEN ?
-                ELSE discovered_by
-            END,
-            discovery_time = CASE
-                WHEN (discovery_time = '' OR discovery_time IS NULL) THEN ?
-                ELSE discovery_time
-            END
-        WHERE token = ? AND pointer = 0
-          AND (info_text = '' OR info_text IS NULL)  -- ensure it's truly first generation
-    ''', (response.output_text, user, datetime.datetime.now().isoformat(), token))
-
-    # If the article already existed (someone discovered before), just bump visits but don't take credit
-    if cursor.rowcount == 0:
-        cursor.execute('''
-            UPDATE articles
-            SET num_visits = num_visits + 1
-            WHERE token = ? AND pointer = 0
-        ''', (token,))
-
-    conn.commit()
-    conn.close()
-    return response.output_text
-
-
-def check_pointer(word):
-    doc = NLP(word)
-    for token in doc:
-        pointer = token.lemma_.lower()
-    
-    pointer = re.sub(r'[^a-z0-9]', '', pointer)  # Clean the pointer word
-    if word == pointer:
-        return 0, ""
-    
-    
-    conn = sqlite3.connect('wiki.db')
-    cursor = conn.cursor()
-    # Check if the pointer already exists in the database
-    cursor.execute('SELECT token FROM articles WHERE name = ?', (pointer,))
-    existing_pointer = cursor.fetchone()
-    if existing_pointer:
-        pointer_token = existing_pointer[0]
-    else:
-        pointer_token = generate_token(pointer)  # Generate a token for the pointer word
-
-    conn.commit()
-    conn.close()
-    return pointer_token, pointer
+    cache_set(cache_key, count)
+    return count
 
 def get_stats():
-    conn = sqlite3.connect('wiki.db')
-    conn.row_factory = sqlite3.Row  # Enable dict-like access
+    """Get community stats with caching."""
+    cached = cache_get("community_stats")
+    if cached:
+        return cached
+    
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) as total_articles FROM articles WHERE pointer = 0 and info_text != ""')
+    
+    # Get total discovered articles
+    cursor.execute('SELECT COUNT(*) as total_articles FROM articles WHERE pointer = 0 AND info_text != ""')
     total_articles = cursor.fetchone()["total_articles"]
-
-    cursor.execute('SELECT COUNT(*) as total_undiscovered FROM articles WHERE info_text == "" and pointer = 0')
+    
+    # Get total undiscovered articles
+    cursor.execute('SELECT COUNT(*) as total_undiscovered FROM articles WHERE pointer = 0 AND info_text = ""')
     total_undiscovered = cursor.fetchone()["total_undiscovered"]
-
-    cursor.execute('SELECT discovered_by, COUNT(*) AS discoveries FROM articles WHERE discovered_by != "" GROUP BY discovered_by ORDER BY discoveries DESC LIMIT 1')
-    most_active_user = cursor.fetchone()
-
-    stat = {
+    
+    # Get most active user
+    cursor.execute('''
+        SELECT discovered_by, COUNT(*) AS discoveries 
+        FROM articles 
+        WHERE discovered_by != "" AND discovered_by IS NOT NULL
+        GROUP BY discovered_by 
+        ORDER BY discoveries DESC 
+        LIMIT 1
+    ''')
+    most_active_user_row = cursor.fetchone()
+    most_active_user = most_active_user_row["discovered_by"] if most_active_user_row else "None"
+    
+    stats = {
         "total_articles": total_articles,
         "total_undiscovered": total_undiscovered,
-        "most_active_user": most_active_user["discovered_by"] if most_active_user else "None",
+        "most_active_user": most_active_user,
     }
-
-    return stat
+    
+    cache_set("community_stats", stats)
+    return stats
 
 def get_article_discovery_info(token):
-    """Get discovery information for an article."""
-    conn = sqlite3.connect('wiki.db')
-    conn.row_factory = sqlite3.Row
+    """Get article discovery info with caching."""
+    cache_key = f"article_info_{token}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT discovered_by, discovery_time, num_visits FROM articles WHERE token = ? AND pointer = 0', (token,))
     row = cursor.fetchone()
-    conn.close()
     
     if row:
-        # Format the date to be more readable
+        # Format the date
         discovery_time = row["discovery_time"]
         if discovery_time:
             try:
-                # Parse ISO format and convert to readable format
                 dt = datetime.datetime.fromisoformat(discovery_time.replace('Z', '+00:00'))
                 formatted_time = dt.strftime("%B %d, %Y at %I:%M %p")
             except:
@@ -344,37 +253,140 @@ def get_article_discovery_info(token):
         else:
             formatted_time = None
             
-        return {
+        result = {
             "discovered_by": row["discovered_by"] or None,
             "discovery_time": formatted_time,
             "visits": row["num_visits"] or 0
         }
-    return {"discovered_by": None, "discovery_time": None, "visits": 0}
+    else:
+        result = {"discovered_by": None, "discovery_time": None, "visits": 0}
+    
+    cache_set(cache_key, result)
+    return result
 
 def increment_article_visits(token):
-    """Increment the visit count for an article."""
-    conn = sqlite3.connect('wiki.db')
+    """Increment article visit count."""
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('UPDATE articles SET num_visits = num_visits + 1 WHERE token = ? AND pointer = 0', (token,))
     conn.commit()
+    
+    # Invalidate cache
+    cache_key = f"article_info_{token}"
+    with cache_lock:
+        if cache_key in cache:
+            del cache[cache_key]
+
+def generate_article_async(token, name, user):
+    """Generate article asynchronously for better performance."""
+    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    
+    # Optimized prompt for faster generation
+    response = client.responses.create(
+        model="gpt-5-nano",
+        input=[
+            {
+                "role": "system",
+                "content": "Create a concise but informative wiki article (300-400 words) about the given topic. Use clear, engaging language and include 2-3 main sections. Start with an introduction and use HTML formatting (h2 for sections, p for paragraphs). No external links or references."
+            },
+            {
+                "role": "user",
+                "content": f"Write a wiki article about {name}."
+            }
+        ],
+    )
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Only update the article content and visit count (discoverer/time already set)
+    cursor.execute('''
+        UPDATE articles
+        SET
+            info_text = ?,
+            num_visits = 1
+        WHERE token = ? AND pointer = 0
+          AND (info_text = '' OR info_text IS NULL)
+    ''', (response.output_text, token))
+    
+    # If article already existed, just increment visits
+    if cursor.rowcount == 0:
+        cursor.execute('''
+            UPDATE articles
+            SET num_visits = num_visits + 1
+            WHERE token = ? AND pointer = 0
+        ''', (token,))
+    
+    conn.commit()
+    
+    # Invalidate relevant caches
+    with cache_lock:
+        cache_keys_to_remove = [k for k in cache.keys() if k.startswith(('user_recent_', 'user_count_', 'community_stats'))]
+        for key in cache_keys_to_remove:
+            del cache[key]
+    
+    return response.output_text
+
+def init_db():
+    """Initialize database with optimized structure."""
+    if os.path.exists('wiki.db'):
+        return
+    
+    conn = sqlite3.connect('wiki.db')
+    cursor = conn.cursor()
+    
+    # Create optimized table structure
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT UNIQUE,
+            name TEXT UNIQUE,
+            pointer INTEGER DEFAULT 0,
+            info_text TEXT DEFAULT '',
+            num_visits INTEGER DEFAULT 0,
+            discovered_by TEXT DEFAULT '',
+            discovery_time TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create indexes for better performance
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_pointer ON articles(pointer)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_discovered_by ON articles(discovered_by)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_discovery_time ON articles(discovery_time)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_articles_name ON articles(name)')
+    
+    conn.commit()
+    
+    # Initialize with default article
+    name = "Infinite Wiki"
+    token = generate_token(name)
+    with open('default_article.txt', 'r', encoding='utf-8') as file:
+        text = file.read()
+    
+    cursor.execute('''
+        INSERT OR IGNORE INTO articles (token, name, info_text, discovered_by, discovery_time)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (token, name, text, "Lau&Five", datetime.datetime.now().isoformat()))
+    conn.commit()
     conn.close()
 
+# Flask routes
 @app.route('/')
 def index():
-    conn = sqlite3.connect('wiki.db')
-    conn.row_factory = sqlite3.Row
+    """Home page route."""
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM articles WHERE id = ?', (1,))
     article = cursor.fetchone()
-    conn.close()
-
+    
     user = current_user()
-    info_text = generate_links(article["info_text"], user)
+    info_text = generate_links_optimized(article["info_text"], user)
     
     # Increment visits and get updated info
     increment_article_visits(article["token"])
     discovery_info = get_article_discovery_info(article["token"])
-
+    
     return render_template(
         'index.html',
         wiki_title=article["name"],
@@ -386,31 +398,52 @@ def index():
         user_discovery_count=get_user_discovery_count(user)
     )
 
-
 @app.route('/article/<token>')
 def article(token):
+    """Article page route."""
     user = current_user()
-    conn = sqlite3.connect('wiki.db')
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM articles WHERE token = ? AND pointer = ?', (token, 0))
     row = cursor.fetchone()
-    conn.close()
-
+    
     if not row:
-        return "Article not found + ", 404
-
+        return "Article not found", 404
+    
     name = row["name"]
     info_text = (row["info_text"] or "")
     needs_generation = (info_text.strip() == "")
     
+    # For new discoveries, set the discoverer and time immediately
+    if needs_generation:
+        cursor.execute('''
+            UPDATE articles
+            SET 
+                discovered_by = CASE
+                    WHEN (discovered_by = '' OR discovered_by IS NULL) THEN ?
+                    ELSE discovered_by
+                END,
+                discovery_time = CASE
+                    WHEN (discovery_time = '' OR discovery_time IS NULL) THEN ?
+                    ELSE discovery_time
+                END
+            WHERE token = ? AND pointer = 0
+        ''', (user, datetime.datetime.now().isoformat(), token))
+        conn.commit()
+        
+        # Invalidate article info cache since we just updated discoverer/time
+        cache_key = f"article_info_{token}"
+        with cache_lock:
+            if cache_key in cache:
+                del cache[cache_key]
+    
     # Increment visits and get updated info
     increment_article_visits(token)
     discovery_info = get_article_discovery_info(token)
-
+    
     if not needs_generation:
         # Render immediately
-        links = generate_links(info_text, user)
+        links = generate_links_optimized(info_text, user)
         return render_template(
             'index.html',
             wiki_title=name,
@@ -423,8 +456,8 @@ def article(token):
             discovery_info=discovery_info,
             user_discovery_count=get_user_discovery_count(user)
         )
-
-    # Render shell with loader; JS will fetch and swap in content
+    
+    # Render shell with loader
     loader_shell = """
       <div id="articleLoader" class="discovery-card" aria-live="polite">
         <div class="discovery-card__content">
@@ -441,7 +474,7 @@ def article(token):
       </div>
       <div id="articleContent" hidden></div>
     """
-
+    
     return render_template(
         'index.html',
         wiki_title=name,
@@ -455,10 +488,10 @@ def article(token):
         user_discovery_count=get_user_discovery_count(user)
     )
 
-
 @app.get('/api/user_recent')
 def api_user_recent():
-    user = current_user()  # reads ?u=...
+    """API endpoint for user's recent discoveries."""
+    user = current_user()
     return jsonify({
         "user": user,
         "recent": get_user_recent(user)
@@ -466,40 +499,40 @@ def api_user_recent():
 
 @app.get('/api/stats')
 def api_stats():
+    """API endpoint for community stats."""
     return jsonify(get_stats())
 
 @app.get('/api/article/<token>')
 def api_article_generate(token):
+    """API endpoint for article generation."""
     user = current_user()
-
+    
     # Fetch the row
-    conn = sqlite3.connect('wiki.db')
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM articles WHERE token = ? AND pointer = 0', (token,))
     row = cursor.fetchone()
-    conn.close()
-
+    
     if not row:
         return jsonify({"ok": False, "error": "not_found"}), 404
-
+    
     name = row["name"]
     info_text = row["info_text"] or ""
     was_empty = (info_text.strip() == "")
-
-    # If first time, generate + credit discoverer
+    
+    # Generate article if needed
     if was_empty:
-        info_text = generate_article(token, name, user)
-        # For new discoveries, don't increment visits again since generate_article already set it to 1
+        info_text = generate_article_async(token, name, user)
+        # For new discoveries, don't increment visits again
         discovery_info = get_article_discovery_info(token)
     else:
         # For existing articles, increment visits
         increment_article_visits(token)
         discovery_info = get_article_discovery_info(token)
-
-    # Linkify with current user
-    html = generate_links(info_text, user)
-
+    
+    # Generate links
+    html = generate_links_optimized(info_text, user)
+    
     return jsonify({
         "ok": True,
         "title": name,
@@ -509,6 +542,16 @@ def api_article_generate(token):
         "updated_stats": get_stats()
     })
 
+# Request lifecycle hooks
+@app.before_request
+def before_request():
+    """Setup before each request."""
+    pass
+
+@app.teardown_request
+def teardown_request(exception=None):
+    """Cleanup after each request."""
+    close_db_connection()
 
 if __name__ == '__main__':
     init_db()
