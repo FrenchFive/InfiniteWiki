@@ -209,7 +209,7 @@ def generate_article(token, name, user):
         input=[
             {
                 "role": "system",
-                "content": "You are an expert in creating detailed articles for a wiki (at least 500 words). Only output the article text without any additional commentary. Be creative and dont hesitate to invent new information if necessary."
+                "content": "You are an expert in creating detailed articles for a wiki (at least 500 words). Create different paragraphs starting with Introduction and then whatever is fit. Only output the article text without any additional commentary. Be creative and dont hesitate to invent new information if necessary."
             },
             {
                 "role": "system",
@@ -332,17 +332,18 @@ def article(token):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM articles WHERE token = ? AND pointer = ?', (token, 0))
-    article = cursor.fetchone()
+    row = cursor.fetchone()
     conn.close()
 
-    if article:
-        token = article["token"]
-        name = article["name"]
-        info_text = article["info_text"]
+    if not row:
+        return "Article not found + ", 404
 
-        if len(info_text) == 0:
-            info_text = generate_article(token, name, user)
+    name = row["name"]
+    info_text = (row["info_text"] or "")
+    needs_generation = (info_text.strip() == "")
 
+    if not needs_generation:
+        # Render immediately
         links = generate_links(info_text, user)
         return render_template(
             'index.html',
@@ -350,10 +351,35 @@ def article(token):
             wiki_content=links,
             stats=get_stats(),
             user_recent=get_user_recent(user),
-            current_user=user
+            current_user=user,
+            article_token=token,
+            needs_generation=False
         )
-    else:
-        return "Article not found + ", 404
+
+    # Render shell with loader; JS will fetch and swap in content
+    loader_shell = """
+      <div id="articleLoader" class="discovery" aria-live="polite">
+        <div class="discovery__icon" aria-hidden="true">💡</div>
+        <h2 class="discovery__title">New discovery by <span id="discoveryUser"></span>!</h2>
+        <p class="discovery__text">
+          Generating the article
+          <span class="dots"><span>.</span><span>.</span><span>.</span></span>
+        </p>
+      </div>
+      <div id="articleContent" hidden></div>
+    """
+
+    return render_template(
+        'index.html',
+        wiki_title=name,
+        wiki_content=loader_shell,
+        stats=get_stats(),
+        user_recent=get_user_recent(user),
+        current_user=user,
+        article_token=token,
+        needs_generation=True
+    )
+
 
 @app.get('/api/user_recent')
 def api_user_recent():
@@ -363,6 +389,38 @@ def api_user_recent():
         "recent": get_user_recent(user)
     })
 
+@app.get('/api/article/<token>')
+def api_article_generate(token):
+    user = current_user()
+
+    # Fetch the row
+    conn = sqlite3.connect('wiki.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM articles WHERE token = ? AND pointer = 0', (token,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+
+    name = row["name"]
+    info_text = row["info_text"] or ""
+    was_empty = (info_text.strip() == "")
+
+    # If first time, generate + credit discoverer
+    if was_empty:
+        info_text = generate_article(token, name, user)
+
+    # Linkify with current user
+    html = generate_links(info_text, user)
+
+    return jsonify({
+        "ok": True,
+        "title": name,
+        "html": html,
+        "was_discovery": was_empty
+    })
 
 
 if __name__ == '__main__':

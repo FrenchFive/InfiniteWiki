@@ -80,18 +80,53 @@
   </footer>
 
   <script>
+    function initialsFromName(name) {
+      const clean = (name || '').trim();
+      if (!clean) return 'U';
+      const parts = clean.split(/\s+/).filter(Boolean).slice(0, 2);
+      return parts.map(p => p[0].toUpperCase()).join('') || 'U';
+    }
+
+    function getStoredUser() {
+      return localStorage.getItem('iw_username') || 'user';
+    }
+
+    function setStoredUser(name) {
+      const clean = (name || 'user').trim() || 'user';
+      localStorage.setItem('iw_username', clean);
+      return clean;
+    }
+
+    function setUrlUserParam(name, replace=true) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('u') !== name) {
+        url.searchParams.set('u', name);
+        if (replace) history.replaceState({}, '', url);
+        else history.pushState({}, '', url);
+      }
+    }
+
+    function applyUserToLinks(name, root=document) {
+      const anchors = root.querySelectorAll('a[href]');
+      anchors.forEach(a => {
+        const href = a.getAttribute('href');
+        if (!href || /^https?:\/\//i.test(href)) return;
+        const u = new URL(href, window.location.origin);
+        u.searchParams.set('u', name);
+        a.setAttribute('href', u.pathname + u.search + u.hash);
+      });
+    }
+
     async function refreshUserRecent(name) {
       try {
         const url = new URL('/api/user_recent', window.location.origin);
         url.searchParams.set('u', name);
         const res = await fetch(url, { cache: 'no-store' });
         const data = await res.json();
-
         const ul = document.getElementById('userRecentList');
         if (!ul) return;
         ul.innerHTML = '';
         const items = Array.isArray(data.recent) ? data.recent : [];
-
         if (items.length === 0) {
           const li = document.createElement('li');
           li.className = 'muted';
@@ -105,52 +140,29 @@
           }
         }
       } catch (e) {
-        // Optional: show a lightweight error state
         console.error('Failed to refresh user recent', e);
       }
     }
 
-    // --- existing code you already have (shortened here) ---
+    // --- wire up
     const userInput = document.getElementById('userName');
     const avatar = document.getElementById('userAvatar');
 
-    function initialsFromName(name) { /* ...same as before... */ }
-    function getStoredUser() { return localStorage.getItem('iw_username') || 'user'; }
-    function setStoredUser(name) {
-      const clean = (name || 'user').trim() || 'user';
-      localStorage.setItem('iw_username', clean);
-      return clean;
-    }
-    function setUrlUserParam(name, replace=true) {
-      const url = new URL(window.location.href);
-      if (url.searchParams.get('u') !== name) {
-        url.searchParams.set('u', name);
-        if (replace) history.replaceState({}, '', url);
-        else history.pushState({}, '', url);
-      }
-    }
-    function applyUserToLinks(name, root=document) { /* ...same as before... */ }
-
-    // Initialize
     let currentName = getStoredUser();
     userInput.value = currentName;
-    avatar.textContent = initialsFromName(currentName);
+    avatar.textContent = initialsFromName(currentName);   // fixes the avatar on load
     setUrlUserParam(currentName, true);
     applyUserToLinks(currentName);
-
-    // NEW: refresh sidebar on load
     refreshUserRecent(currentName);
 
-    // When the user types a new name, immediately refresh the sidebar
     userInput.addEventListener('input', () => {
       currentName = setStoredUser(userInput.value);
-      avatar.textContent = initialsFromName(currentName);
+      avatar.textContent = initialsFromName(currentName); // live update avatar
       setUrlUserParam(currentName, true);
       applyUserToLinks(currentName);
-      refreshUserRecent(currentName);          // <--- key line
+      refreshUserRecent(currentName);
     });
 
-    // Keep links patched just before nav (you already added this)
     document.addEventListener('click', (ev) => {
       if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
       let a = ev.target;
@@ -163,7 +175,70 @@
         a.setAttribute('href', u.pathname + u.search + u.hash);
       } catch (_) {}
     }, true);
+
+    // Values provided by server (may be empty on non-article pages)
+    const ARTICLE_TOKEN = {{ (article_token | default('')) | tojson }};
+    const NEEDS_GEN = {{ (needs_generation | default(false)) | tojson }};
+
+    // Put the current username into the congratulation text
+    (function initDiscoveryHeader() {
+      const el = document.getElementById('discoveryUser');
+      if (el) {
+        const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
+        el.textContent = name;
+      }
+    })();
+
+    async function fetchAndRenderArticle() {
+      if (!ARTICLE_TOKEN) return;
+      const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
+
+      // Ensure URL and links carry ?u=
+      setUrlUserParam(name, true);
+      applyUserToLinks(name);
+
+      const url = new URL(`/api/article/${ARTICLE_TOKEN}`, window.location.origin);
+      url.searchParams.set('u', name);
+
+      // Fetch article (this will generate if it’s the first time)
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+
+      if (!data.ok) {
+        // Show a super-light error state in place
+        const loader = document.getElementById('articleLoader');
+        if (loader) loader.innerHTML = '<p>Sorry, something went wrong. Please try again.</p>';
+        return;
+      }
+
+      // Swap the HTML in
+      const loader = document.getElementById('articleLoader');
+      const content = document.getElementById('articleContent');
+      if (content) {
+        content.innerHTML = data.html;
+        content.hidden = false;
+      }
+      if (loader) loader.remove();
+
+      // Because we injected fresh links, make sure they carry ?u=
+      applyUserToLinks(name);
+
+      // If this was a new discovery, refresh the sidebar list
+      if (data.was_discovery) {
+        refreshUserRecent(name);
+      }
+    }
+
+    if (NEEDS_GEN) {
+      // Kick off generation/fetch as soon as the page is ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', fetchAndRenderArticle);
+      } else {
+        fetchAndRenderArticle();
+      }
+    }
   </script>
+
 
 
 </body>
