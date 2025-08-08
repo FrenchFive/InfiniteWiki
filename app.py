@@ -32,7 +32,7 @@ def get_user_recent(user, limit=10):
     cursor = conn.cursor()
     cursor.execute(
         '''
-        SELECT name, discovery_time
+        SELECT name, discovery_time, token
         FROM articles
         WHERE pointer = 0
           AND discovered_by = ?
@@ -45,7 +45,7 @@ def get_user_recent(user, limit=10):
     )
     rows = cursor.fetchall()
     conn.close()
-    return [{"name": r["name"], "discovery_time": r["discovery_time"]} for r in rows]
+    return [{"name": r["name"], "discovery_time": r["discovery_time"], "token": r["token"]} for r in rows]
 
 def get_user_discovery_count(user):
     """Get the number of discoveries made by a user."""
@@ -244,13 +244,13 @@ def generate_article(token, name, user):
     conn = sqlite3.connect('wiki.db')
     cursor = conn.cursor()
 
-    # Write the article text and bump visits.
+    # Write the article text and set initial visit count to 1 for new discoveries.
     # Mark discovery ONLY now (first generation), and NEVER earlier.
     cursor.execute('''
         UPDATE articles
         SET
             info_text = ?,
-            num_visits = num_visits + 1,
+            num_visits = 1,
             -- Only stamp discoverer if this is the first time the article is generated
             discovered_by = CASE
                 WHEN (discovered_by = '' OR discovered_by IS NULL) THEN ?
@@ -264,7 +264,7 @@ def generate_article(token, name, user):
           AND (info_text = '' OR info_text IS NULL)  -- ensure it's truly first generation
     ''', (response.output_text, user, datetime.datetime.now().isoformat(), token))
 
-    # If the article already existed (someone discovered before), still bump visits but don't take credit
+    # If the article already existed (someone discovered before), just bump visits but don't take credit
     if cursor.rowcount == 0:
         cursor.execute('''
             UPDATE articles
@@ -327,16 +327,37 @@ def get_article_discovery_info(token):
     conn = sqlite3.connect('wiki.db')
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT discovered_by, discovery_time FROM articles WHERE token = ? AND pointer = 0', (token,))
+    cursor.execute('SELECT discovered_by, discovery_time, num_visits FROM articles WHERE token = ? AND pointer = 0', (token,))
     row = cursor.fetchone()
     conn.close()
     
     if row:
+        # Format the date to be more readable
+        discovery_time = row["discovery_time"]
+        if discovery_time:
+            try:
+                # Parse ISO format and convert to readable format
+                dt = datetime.datetime.fromisoformat(discovery_time.replace('Z', '+00:00'))
+                formatted_time = dt.strftime("%B %d, %Y at %I:%M %p")
+            except:
+                formatted_time = discovery_time
+        else:
+            formatted_time = None
+            
         return {
             "discovered_by": row["discovered_by"] or None,
-            "discovery_time": row["discovery_time"] or None
+            "discovery_time": formatted_time,
+            "visits": row["num_visits"] or 0
         }
-    return {"discovered_by": None, "discovery_time": None}
+    return {"discovered_by": None, "discovery_time": None, "visits": 0}
+
+def increment_article_visits(token):
+    """Increment the visit count for an article."""
+    conn = sqlite3.connect('wiki.db')
+    cursor = conn.cursor()
+    cursor.execute('UPDATE articles SET num_visits = num_visits + 1 WHERE token = ? AND pointer = 0', (token,))
+    conn.commit()
+    conn.close()
 
 @app.route('/')
 def index():
@@ -349,6 +370,9 @@ def index():
 
     user = current_user()
     info_text = generate_links(article["info_text"], user)
+    
+    # Increment visits and get updated info
+    increment_article_visits(article["token"])
     discovery_info = get_article_discovery_info(article["token"])
 
     return render_template(
@@ -379,6 +403,9 @@ def article(token):
     name = row["name"]
     info_text = (row["info_text"] or "")
     needs_generation = (info_text.strip() == "")
+    
+    # Increment visits and get updated info
+    increment_article_visits(token)
     discovery_info = get_article_discovery_info(token)
 
     if not needs_generation:
@@ -437,6 +464,10 @@ def api_user_recent():
         "recent": get_user_recent(user)
     })
 
+@app.get('/api/stats')
+def api_stats():
+    return jsonify(get_stats())
+
 @app.get('/api/article/<token>')
 def api_article_generate(token):
     user = current_user()
@@ -462,6 +493,9 @@ def api_article_generate(token):
 
     # Linkify with current user
     html = generate_links(info_text, user)
+    
+    # Increment visits and get updated info
+    increment_article_visits(token)
     discovery_info = get_article_discovery_info(token)
 
     return jsonify({
@@ -469,7 +503,8 @@ def api_article_generate(token):
         "title": name,
         "html": html,
         "was_discovery": was_empty,
-        "discovery_info": discovery_info
+        "discovery_info": discovery_info,
+        "updated_stats": get_stats()
     })
 
 

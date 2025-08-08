@@ -31,40 +31,46 @@
 
   <main class="layout">
     <section class="content">
-      <article class="article">
-        <h1 class="article__title">{{ wiki_title }}</h1>
-        <div class="article__body">
-          {{ wiki_content|safe }}
-        </div>
-      </article>
+             <article class="article">
+         <h1 class="article__title">{{ wiki_title|upper }}</h1>
+         <div class="article__body">
+           {{ wiki_content|safe }}
+         </div>
+       </article>
     </section>
 
     <aside class="sidebar">
-      <div class="card">
-        <h3>Article Info</h3>
-        <div class="discovery-info">
-          <div class="discovery-info__item">
-            <div class="discovery-info__label">Discovered by</div>
-            <div class="discovery-info__value" id="discoveryByDisplay">
-              {% if discovery_info and discovery_info.discovered_by %}
-                {{ discovery_info.discovered_by }}
-              {% else %}
-                <span class="muted">Not yet discovered</span>
-              {% endif %}
-            </div>
-          </div>
-          <div class="discovery-info__item">
-            <div class="discovery-info__label">Date</div>
-            <div class="discovery-info__value" id="discoveryDateDisplay">
-              {% if discovery_info and discovery_info.discovery_time %}
-                {{ discovery_info.discovery_time }}
-              {% else %}
-                <span class="muted">Not yet discovered</span>
-              {% endif %}
-            </div>
-          </div>
-        </div>
-      </div>
+             <div class="card">
+         <h3>Article Info</h3>
+         <div class="discovery-info">
+           <div class="discovery-info__item">
+             <div class="discovery-info__label">Discovered by</div>
+             <div class="discovery-info__value" id="discoveryByDisplay">
+               {% if discovery_info and discovery_info.discovered_by %}
+                 {{ discovery_info.discovered_by }}
+               {% else %}
+                 <span class="muted">Not yet discovered</span>
+               {% endif %}
+             </div>
+           </div>
+           <div class="discovery-info__item">
+             <div class="discovery-info__label">Date</div>
+             <div class="discovery-info__value" id="discoveryDateDisplay">
+               {% if discovery_info and discovery_info.discovery_time %}
+                 {{ discovery_info.discovery_time }}
+               {% else %}
+                 <span class="muted">Not yet discovered</span>
+               {% endif %}
+             </div>
+           </div>
+           <div class="discovery-info__item">
+             <div class="discovery-info__label">Visits</div>
+             <div class="discovery-info__value" id="visitCountDisplay">
+               {{ discovery_info.visits if discovery_info and discovery_info.visits else 0 }}
+             </div>
+           </div>
+         </div>
+       </div>
 
       <div class="card">
         <h3>Community</h3>
@@ -94,15 +100,15 @@
         </div>
         <div class="recent-discoveries">
           <div class="recent-discoveries__label">Latest discoveries</div>
-          <ul class="pill-list" id="userRecentList" data-empty-text="No discoveries yet — go explore!">
-            {% if user_recent and user_recent|length > 0 %}
-              {% for item in user_recent %}
-                <li>{{ item.name }}</li>
-              {% endfor %}
-            {% else %}
-              <li class="muted">No discoveries yet — go explore!</li>
-            {% endif %}
-          </ul>
+                     <ul class="pill-list" id="userRecentList" data-empty-text="No discoveries yet — go explore!">
+             {% if user_recent and user_recent|length > 0 %}
+               {% for item in user_recent %}
+                 <li><a href="/article/{{ item.token }}?u={{ current_user|e }}" class="pill-link">{{ item.name }}</a></li>
+               {% endfor %}
+             {% else %}
+               <li class="muted">No discoveries yet — go explore!</li>
+             {% endif %}
+           </ul>
         </div>
       </div>
     </aside>
@@ -165,15 +171,45 @@
           li.className = 'muted';
           li.textContent = ul.dataset.emptyText || 'No discoveries yet — go explore!';
           ul.appendChild(li);
-        } else {
-          for (const item of items) {
-            const li = document.createElement('li');
-            li.textContent = item.name || item;
-            ul.appendChild(li);
-          }
-        }
+                 } else {
+           for (const item of items) {
+             const li = document.createElement('li');
+             const link = document.createElement('a');
+             link.href = `/article/${item.token}?u=${encodeURIComponent(name)}`;
+             link.className = 'pill-link';
+             link.textContent = item.name || item;
+             li.appendChild(link);
+             ul.appendChild(li);
+           }
+         }
       } catch (e) {
         console.error('Failed to refresh user recent', e);
+      }
+    }
+
+    async function refreshStats() {
+      try {
+        const url = new URL('/api/stats', window.location.origin);
+        const res = await fetch(url, { cache: 'no-store' });
+        const stats = await res.json();
+        
+        // Update community stats
+        const totalArticles = document.querySelector('.metric__value');
+        if (totalArticles && stats.total_articles !== undefined) {
+          totalArticles.textContent = stats.total_articles;
+        }
+        
+        const totalUndiscovered = document.querySelectorAll('.metric__value')[1];
+        if (totalUndiscovered && stats.total_undiscovered !== undefined) {
+          totalUndiscovered.textContent = stats.total_undiscovered;
+        }
+        
+        const topDiscoverer = document.querySelectorAll('.metric__value')[2];
+        if (topDiscoverer && stats.most_active_user !== undefined) {
+          topDiscoverer.textContent = stats.most_active_user;
+        }
+      } catch (e) {
+        console.error('Failed to refresh stats', e);
       }
     }
 
@@ -269,28 +305,32 @@
       }
       if (loader) loader.remove();
 
-      // Update discovery information in sidebar if available
-      if (data.discovery_info) {
-        const discoveryDateDisplay = document.getElementById('discoveryDateDisplay');
-        const discoveryByDisplay = document.getElementById('discoveryByDisplay');
-        
-        if (discoveryDateDisplay) {
-          if (data.discovery_info.discovery_time) {
-            const date = new Date(data.discovery_info.discovery_time);
-            discoveryDateDisplay.textContent = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
-          } else {
-            discoveryDateDisplay.innerHTML = '<span class="muted">Not yet discovered</span>';
-          }
-        }
-        
-        if (discoveryByDisplay) {
-          if (data.discovery_info.discovered_by) {
-            discoveryByDisplay.textContent = data.discovery_info.discovered_by;
-          } else {
-            discoveryByDisplay.innerHTML = '<span class="muted">Not yet discovered</span>';
-          }
-        }
-      }
+             // Update discovery information in sidebar if available
+       if (data.discovery_info) {
+         const discoveryDateDisplay = document.getElementById('discoveryDateDisplay');
+         const discoveryByDisplay = document.getElementById('discoveryByDisplay');
+         const visitCountDisplay = document.getElementById('visitCountDisplay');
+         
+         if (discoveryDateDisplay) {
+           if (data.discovery_info.discovery_time) {
+             discoveryDateDisplay.textContent = data.discovery_info.discovery_time;
+           } else {
+             discoveryDateDisplay.innerHTML = '<span class="muted">Not yet discovered</span>';
+           }
+         }
+         
+         if (discoveryByDisplay) {
+           if (data.discovery_info.discovered_by) {
+             discoveryByDisplay.textContent = data.discovery_info.discovered_by;
+           } else {
+             discoveryByDisplay.innerHTML = '<span class="muted">Not yet discovered</span>';
+           }
+         }
+         
+         if (visitCountDisplay && data.discovery_info.visits !== undefined) {
+           visitCountDisplay.textContent = data.discovery_info.visits;
+         }
+       }
 
       // Because we injected fresh links, make sure they carry ?u=
       applyUserToLinks(name);
@@ -303,6 +343,23 @@
         if (userStatValue) {
           const currentCount = parseInt(userStatValue.textContent) || 0;
           userStatValue.textContent = currentCount + 1;
+        }
+        // Update community stats with data from API response
+        if (data.updated_stats) {
+          const totalArticles = document.querySelector('.metric__value');
+          if (totalArticles) {
+            totalArticles.textContent = data.updated_stats.total_articles;
+          }
+          
+          const totalUndiscovered = document.querySelectorAll('.metric__value')[1];
+          if (totalUndiscovered) {
+            totalUndiscovered.textContent = data.updated_stats.total_undiscovered;
+          }
+          
+          const topDiscoverer = document.querySelectorAll('.metric__value')[2];
+          if (topDiscoverer) {
+            topDiscoverer.textContent = data.updated_stats.most_active_user;
+          }
         }
       }
     }

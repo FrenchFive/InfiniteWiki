@@ -24,6 +24,9 @@ body {
   background: radial-gradient(1200px 600px at 10% -10%, rgba(110,168,254,0.12), transparent 60%),
               radial-gradient(1000px 500px at 100% 0%, rgba(154,107,255,0.10), transparent 60%),
               var(--bg);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  background-size: cover;
 }
 
 /* Header */
@@ -156,6 +159,18 @@ body {
   padding: 0.35rem 0.6rem; border-radius: 999px;
   background: linear-gradient(135deg, rgba(110,168,254,0.18), rgba(154,107,255,0.18));
   border: 1px solid var(--border);
+}
+
+.pill-link {
+  color: inherit;
+  text-decoration: none;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.pill-link:hover {
+  color: var(--brand-a);
 }
 
 /* Footer */
