@@ -268,10 +268,26 @@
       if (!ARTICLE_TOKEN) return;
       const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
 
+      // Start loading bar timer
+      const startTime = Date.now();
+      const loadingDuration = 15000; // 15 seconds
+      let loadingBarInterval = null;
+      let currentProgress = 0;
+
       // Update loading status to "Searching for the article"
       const loadingStatus = document.getElementById('loadingStatus');
       if (loadingStatus) {
-        loadingStatus.innerHTML = 'Searching for the article<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+        loadingStatus.innerHTML = 'Searching for the article<span class="dots"><span>.</span><span>.</span><span>.</span></span><div class="loading-bar-container"><div class="loading-bar"></div></div>';
+        
+        // Start loading bar animation
+        const loadingBar = loadingStatus.querySelector('.loading-bar');
+        if (loadingBar) {
+          loadingBarInterval = setInterval(() => {
+            const elapsed = Date.now() - startTime;
+            currentProgress = Math.min(elapsed / loadingDuration, 1);
+            loadingBar.style.width = (currentProgress * 100) + '%';
+          }, 50); // Update every 50ms for smooth animation
+        }
       }
 
       // Ensure URL and links carry ?u=
@@ -289,12 +305,22 @@
         // Show a super-light error state in place
         const loader = document.getElementById('articleLoader');
         if (loader) loader.innerHTML = '<p>Sorry, something went wrong. Please try again.</p>';
+        // Clear loading bar interval
+        if (loadingBarInterval) {
+          clearInterval(loadingBarInterval);
+        }
         return;
       }
 
-      // Update loading status to "Tokenizing new words"
+      // Speed up loading bar to completion if article finished early
+      if (loadingBarInterval) {
+        clearInterval(loadingBarInterval);
+        currentProgress = 1; // Set to 100%
+      }
+
+      // Update loading status to "Tokenizing new words" (recreate loading bar with current progress)
       if (loadingStatus) {
-        loadingStatus.innerHTML = 'Tokenizing new words<span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+        loadingStatus.innerHTML = 'Tokenizing new words<span class="dots"><span>.</span><span>.</span><span>.</span></span><div class="loading-bar-container"><div class="loading-bar" style="width: ' + (currentProgress * 100) + '%"></div></div>';
       }
 
       // Swap the HTML in
@@ -305,6 +331,11 @@
         content.hidden = false;
       }
       if (loader) loader.remove();
+
+      // Clean up loading bar
+      if (loadingBarInterval) {
+        clearInterval(loadingBarInterval);
+      }
 
              // Update discovery information in sidebar if available
        if (data.discovery_info) {
