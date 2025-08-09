@@ -1,61 +1,586 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>InfiniteWiki</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
+  <header class="iw-header">
+    <div class="iw-header__inner">
+      <a class="brand" href="/?u={{ current_user|e }}">
+        <span class="brand__logo">∞</span>
+        <span class="brand__text">InfiniteWiki</span>
+      </a>
 
-  <header>
-    <div class="site-name">InfiniteWiki</div>
 
-    <div class="search-bar">
-      <input type="text" placeholder="Rechercher...">
+      <div class="header-controls">
+        <div class="search-container">
+          <input id="searchInput" type="search" placeholder="Search…" autocomplete="off" />
+          <div id="searchSuggestion" class="search-suggestion" style="display: none;"></div>
+          <button type="button" id="searchBtn" title="Search">Search</button>
+        </div>
+
+        <div class="user">
+          <div class="user__avatar" id="userAvatar" aria-hidden="true">U</div>
+          <input id="userName" class="user__input" type="text" placeholder="user" aria-label="Your name" />
+        </div>
+      </div>
     </div>
   </header>
 
-  <main>
-    <div class="content">
-      <h2>{{ wiki_title }}</h2>
-      <p>
-        {{ wiki_content|safe }}
-      </p>
-    </div>
-
+  <main class="layout">
+    <section class="content">
+             <article class="article">
+         <h1 class="article__title">{{ wiki_title|upper }}</h1>
+         <div class="article__body">
+           {{ wiki_content|safe }}
+         </div>
+       </article>
+    </section>
 
     <aside class="sidebar">
-        <br>
+             <div class="card">
+         <h3>Article Info</h3>
+         <div class="discovery-info">
+           <div class="discovery-info__item">
+             <div class="discovery-info__label">Discovered by</div>
+             <div class="discovery-info__value" id="discoveryByDisplay">
+               {% if discovery_info and discovery_info.discovered_by %}
+                 {{ discovery_info.discovered_by }}
+               {% else %}
+                 <span class="muted">Not yet discovered</span>
+               {% endif %}
+             </div>
+           </div>
+           <div class="discovery-info__item">
+             <div class="discovery-info__label">Date</div>
+             <div class="discovery-info__value" id="discoveryDateDisplay">
+               {% if discovery_info and discovery_info.discovery_time %}
+                 {{ discovery_info.discovery_time }}
+               {% else %}
+                 <span class="muted">Not yet discovered</span>
+               {% endif %}
+             </div>
+           </div>
+           <div class="discovery-info__item">
+             <div class="discovery-info__label">Visits</div>
+             <div class="discovery-info__value" id="visitCountDisplay">
+               {{ discovery_info.visits if discovery_info and discovery_info.visits else 0 }}
+             </div>
+           </div>
+         </div>
+       </div>
 
-        <h3>Community Stats: </h3>
-        <p><strong>Words discovered by community:</strong>{{ stats["total_articles"] }}</p>
-        <p><strong>Undiscovered words:</strong>{{ stats["total_undiscovered"] }}</p>
-        <p><strong>Top discoverer:</strong>{{ stats["most_active_user"] }}</p>
+      <div class="card">
+        <h3>Community</h3>
+        <div class="metrics">
+          <div class="metric">
+            <div class="metric__label">Words discovered</div>
+            <div class="metric__value">{{ stats["total_articles"] }}</div>
+          </div>
+          <div class="metric">
+            <div class="metric__label">Undiscovered</div>
+            <div class="metric__value">{{ stats["total_undiscovered"] }}</div>
+          </div>
+          <div class="metric">
+            <div class="metric__label">Top discoverer</div>
+            <div class="metric__value">{{ stats["most_active_user"] }}</div>
+          </div>
+        </div>
+      </div>
 
-        <br>
-
-        <h3>Your Stats: </h3>
-        <p><strong>Words you discovered:</strong> 15</p>
-        <h4>Last 10 you discovered:</h4>
-        <ul>
-          <li>Quantum</li>
-          <li>Algorithm</li>
-          <li>Neuron</li>
-          <li>Protocol</li>
-          <li>Syntax</li>
-          <li>Cache</li>
-          <li>Buffer</li>
-          <li>Daemon</li>
-          <li>Node</li>
-          <li>Loop</li>
-        </ul>
+      <div class="card">
+        <h3>Your Discoveries</h3>
+        <div class="user-stats">
+          <div class="user-stat">
+            <div class="user-stat__label">Total discoveries</div>
+            <div class="user-stat__value">{{ user_discovery_count }}</div>
+          </div>
+        </div>
+        <div class="recent-discoveries">
+          <div class="recent-discoveries__label">Latest discoveries</div>
+                     <ul class="pill-list" id="userRecentList" data-empty-text="No discoveries yet — go explore!">
+             {% if user_recent and user_recent|length > 0 %}
+               {% for item in user_recent %}
+                 <li><a href="/article/{{ item.token }}?u={{ current_user|e }}" class="pill-link">{{ item.name }}</a></li>
+               {% endfor %}
+             {% else %}
+               <li class="muted">No discoveries yet — go explore!</li>
+             {% endif %}
+           </ul>
+        </div>
+      </div>
     </aside>
   </main>
 
-  <footer>
-    <p>&copy; By Five and Lalaulune</p>
+  <footer class="iw-footer">
+    <p>Made with ♥ by Five &amp; Lalaulune</p>
   </footer>
+
+  <script>
+    function initialsFromName(name) {
+      const clean = (name || '').trim();
+      if (!clean) return 'U';
+      const parts = clean.split(/\s+/).filter(Boolean).slice(0, 2);
+      return parts.map(p => p[0].toUpperCase()).join('') || 'U';
+    }
+
+    function getStoredUser() {
+      return localStorage.getItem('iw_username') || 'user';
+    }
+
+    function setStoredUser(name) {
+      const clean = (name || 'user').trim() || 'user';
+      localStorage.setItem('iw_username', clean);
+      return clean;
+    }
+
+    function setUrlUserParam(name, replace=true) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('u') !== name) {
+        url.searchParams.set('u', name);
+        if (replace) history.replaceState({}, '', url);
+        else history.pushState({}, '', url);
+      }
+    }
+
+    function applyUserToLinks(name, root=document) {
+      const anchors = root.querySelectorAll('a[href]');
+      anchors.forEach(a => {
+        const href = a.getAttribute('href');
+        if (!href || /^https?:\/\//i.test(href)) return;
+        const u = new URL(href, window.location.origin);
+        u.searchParams.set('u', name);
+        a.setAttribute('href', u.pathname + u.search + u.hash);
+      });
+    }
+
+    async function refreshUserRecent(name) {
+      try {
+        const url = new URL('/api/user_recent', window.location.origin);
+        url.searchParams.set('u', name);
+        const res = await fetch(url, { cache: 'no-store' });
+        const data = await res.json();
+        const ul = document.getElementById('userRecentList');
+        if (!ul) return;
+        ul.innerHTML = '';
+        const items = Array.isArray(data.recent) ? data.recent : [];
+        if (items.length === 0) {
+          const li = document.createElement('li');
+          li.className = 'muted';
+          li.textContent = ul.dataset.emptyText || 'No discoveries yet — go explore!';
+          ul.appendChild(li);
+                 } else {
+           for (const item of items) {
+             const li = document.createElement('li');
+             const link = document.createElement('a');
+             link.href = `/article/${item.token}?u=${encodeURIComponent(name)}`;
+             link.className = 'pill-link';
+             link.textContent = item.name || item;
+             li.appendChild(link);
+             ul.appendChild(li);
+           }
+         }
+      } catch (e) {
+        console.error('Failed to refresh user recent', e);
+      }
+    }
+
+    async function refreshStats() {
+      try {
+        const url = new URL('/api/stats', window.location.origin);
+        const res = await fetch(url, { cache: 'no-store' });
+        const stats = await res.json();
+        
+        // Update community stats
+        const totalArticles = document.querySelector('.metric__value');
+        if (totalArticles && stats.total_articles !== undefined) {
+          totalArticles.textContent = stats.total_articles;
+        }
+        
+        const totalUndiscovered = document.querySelectorAll('.metric__value')[1];
+        if (totalUndiscovered && stats.total_undiscovered !== undefined) {
+          totalUndiscovered.textContent = stats.total_undiscovered;
+        }
+        
+        const topDiscoverer = document.querySelectorAll('.metric__value')[2];
+        if (topDiscoverer && stats.most_active_user !== undefined) {
+          topDiscoverer.textContent = stats.most_active_user;
+        }
+      } catch (e) {
+        console.error('Failed to refresh stats', e);
+      }
+    }
+
+    async function refreshUserStats(name) {
+      try {
+        const url = new URL('/api/user_stats', window.location.origin);
+        url.searchParams.set('u', name);
+        const res = await fetch(url, { cache: 'no-store' });
+        const data = await res.json();
+        
+        // Update user discovery count
+        const userStatValue = document.querySelector('.user-stat__value');
+        if (userStatValue && data.discovery_count !== undefined) {
+          userStatValue.textContent = data.discovery_count;
+        }
+      } catch (e) {
+        console.error('Failed to refresh user stats', e);
+      }
+    }
+
+    // --- wire up
+    const userInput = document.getElementById('userName');
+    const avatar = document.getElementById('userAvatar');
+
+    let currentName = getStoredUser();
+    userInput.value = currentName;
+    avatar.textContent = initialsFromName(currentName);   // fixes the avatar on load
+    setUrlUserParam(currentName, true);
+    applyUserToLinks(currentName);
+    refreshUserRecent(currentName);
+    refreshUserStats(currentName);
+
+    userInput.addEventListener('input', () => {
+      currentName = setStoredUser(userInput.value);
+      avatar.textContent = initialsFromName(currentName); // live update avatar
+      setUrlUserParam(currentName, true);
+      applyUserToLinks(currentName);
+      refreshUserRecent(currentName);
+      refreshUserStats(currentName);
+    });
+
+    document.addEventListener('click', (ev) => {
+      if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+      let a = ev.target;
+      while (a && a.tagName !== 'A') a = a.parentElement;
+      if (!a || !a.hasAttribute('href')) return;
+      try {
+        const href = a.getAttribute('href');
+        const u = new URL(href, window.location.origin);
+        u.searchParams.set('u', currentName);
+        a.setAttribute('href', u.pathname + u.search + u.hash);
+      } catch (_) {}
+    }, true);
+
+    // Values provided by server (may be empty on non-article pages)
+    const ARTICLE_TOKEN = {{ (article_token | default('')) | tojson }};
+    const NEEDS_GEN = {{ (needs_generation | default(false)) | tojson }};
+
+    // Put the current username into the congratulation text and set the date
+    (function initDiscoveryHeader() {
+      const el = document.getElementById('discoveryUser');
+      const dateEl = document.getElementById('discoveryDate');
+      if (el) {
+        const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
+        el.textContent = name;
+      }
+      if (dateEl) {
+        const now = new Date();
+        dateEl.textContent = now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
+      }
+    })();
+
+    async function fetchAndRenderArticle() {
+      if (!ARTICLE_TOKEN) return;
+      const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
+
+      // Start loading bar timer
+      const startTime = Date.now();
+      const loadingDuration = 15000; // 15 seconds
+      let loadingBarInterval = null;
+      let currentProgress = 0;
+
+      // Update loading status to "Searching for the article"
+      const loadingStatus = document.getElementById('loadingStatus');
+      if (loadingStatus) {
+        loadingStatus.innerHTML = 'Searching for the article<span class="dots"><span>.</span><span>.</span><span>.</span></span><div class="loading-bar-container"><div class="loading-bar"></div></div>';
+        
+        // Start loading bar animation
+        const loadingBar = loadingStatus.querySelector('.loading-bar');
+        if (loadingBar) {
+          loadingBarInterval = setInterval(() => {
+            const elapsed = Date.now() - startTime;
+            currentProgress = Math.min(elapsed / loadingDuration, 1);
+            loadingBar.style.width = (currentProgress * 100) + '%';
+          }, 50); // Update every 50ms for smooth animation
+        }
+      }
+
+      // Ensure URL and links carry ?u=
+      setUrlUserParam(name, true);
+      applyUserToLinks(name);
+
+      const url = new URL(`/api/article/${ARTICLE_TOKEN}`, window.location.origin);
+      url.searchParams.set('u', name);
+
+      // Fetch article (this will generate if it’s the first time)
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+
+      if (!data.ok) {
+        // Show a super-light error state in place
+        const loader = document.getElementById('articleLoader');
+        if (loader) loader.innerHTML = '<p>Sorry, something went wrong. Please try again.</p>';
+        // Clear loading bar interval
+        if (loadingBarInterval) {
+          clearInterval(loadingBarInterval);
+        }
+        return;
+      }
+
+      // Speed up loading bar to completion if article finished early
+      if (loadingBarInterval) {
+        clearInterval(loadingBarInterval);
+        
+        // Speed up the animation to complete in 1 second
+        const speedUpStartTime = Date.now();
+        const speedUpDuration = 1000; // 1 second
+        const speedUpInterval = setInterval(() => {
+          const speedUpElapsed = Date.now() - speedUpStartTime;
+          const speedUpProgress = Math.min(speedUpElapsed / speedUpDuration, 1);
+          currentProgress = currentProgress + (speedUpProgress * (1 - currentProgress));
+          
+          const loadingBar = loadingStatus?.querySelector('.loading-bar');
+          if (loadingBar) {
+            loadingBar.style.width = (currentProgress * 100) + '%';
+          }
+          
+          if (currentProgress >= 1) {
+            clearInterval(speedUpInterval);
+          }
+        }, 16); // 60fps animation
+      }
+
+      // Update loading status to "Tokenizing new words" (recreate loading bar with current progress)
+      if (loadingStatus) {
+        loadingStatus.innerHTML = 'Tokenizing new words<span class="dots"><span>.</span><span>.</span><span>.</span></span><div class="loading-bar-container"><div class="loading-bar" style="width: ' + (currentProgress * 100) + '%"></div></div>';
+      }
+
+      // Swap the HTML in
+      const loader = document.getElementById('articleLoader');
+      const content = document.getElementById('articleContent');
+      if (content) {
+        content.innerHTML = data.html;
+        content.hidden = false;
+      }
+      if (loader) loader.remove();
+
+      // Clean up loading bar
+      if (loadingBarInterval) {
+        clearInterval(loadingBarInterval);
+      }
+
+             // Update discovery information in sidebar if available
+       if (data.discovery_info) {
+         const discoveryDateDisplay = document.getElementById('discoveryDateDisplay');
+         const discoveryByDisplay = document.getElementById('discoveryByDisplay');
+         const visitCountDisplay = document.getElementById('visitCountDisplay');
+         
+         if (discoveryDateDisplay) {
+           if (data.discovery_info.discovery_time) {
+             discoveryDateDisplay.textContent = data.discovery_info.discovery_time;
+           } else {
+             discoveryDateDisplay.innerHTML = '<span class="muted">Not yet discovered</span>';
+           }
+         }
+         
+         if (discoveryByDisplay) {
+           if (data.discovery_info.discovered_by) {
+             discoveryByDisplay.textContent = data.discovery_info.discovered_by;
+           } else {
+             discoveryByDisplay.innerHTML = '<span class="muted">Not yet discovered</span>';
+           }
+         }
+         
+         if (visitCountDisplay && data.discovery_info.visits !== undefined) {
+           visitCountDisplay.textContent = data.discovery_info.visits;
+         }
+       }
+
+      // Because we injected fresh links, make sure they carry ?u=
+      applyUserToLinks(name);
+
+      // If this was a new discovery, refresh the sidebar list and update user stats
+      if (data.was_discovery) {
+        refreshUserRecent(name);
+        // Update user discovery count
+        const userStatValue = document.querySelector('.user-stat__value');
+        if (userStatValue) {
+          const currentCount = parseInt(userStatValue.textContent) || 0;
+          userStatValue.textContent = currentCount + 1;
+        }
+        // Update community stats with data from API response
+        if (data.updated_stats) {
+          const totalArticles = document.querySelector('.metric__value');
+          if (totalArticles) {
+            totalArticles.textContent = data.updated_stats.total_articles;
+          }
+          
+          const totalUndiscovered = document.querySelectorAll('.metric__value')[1];
+          if (totalUndiscovered) {
+            totalUndiscovered.textContent = data.updated_stats.total_undiscovered;
+          }
+          
+          const topDiscoverer = document.querySelectorAll('.metric__value')[2];
+          if (topDiscoverer) {
+            topDiscoverer.textContent = data.updated_stats.most_active_user;
+          }
+        }
+      }
+    }
+
+    if (NEEDS_GEN) {
+      // Kick off generation/fetch as soon as the page is ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', fetchAndRenderArticle);
+      } else {
+        fetchAndRenderArticle();
+      }
+    }
+
+    // Search functionality with suggestions
+    const searchInput = document.getElementById('searchInput');
+    const searchSuggestion = document.getElementById('searchSuggestion');
+    const searchBtn = document.getElementById('searchBtn');
+    let searchTimeout = null;
+    let currentSuggestion = null;
+
+    async function performSearch(query) {
+      if (!query.trim()) {
+        hideSuggestion();
+        return;
+      }
+
+      try {
+        const url = new URL('/api/search', window.location.origin);
+        url.searchParams.set('q', query);
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.suggestion) {
+          showSuggestion(data.suggestion, query);
+        } else {
+          hideSuggestion();
+        }
+      } catch (error) {
+        console.error('Search error:', error);
+        hideSuggestion();
+      }
+    }
+
+    function showSuggestion(suggestion, query) {
+      currentSuggestion = suggestion;
+      searchSuggestion.innerHTML = `
+        <div class="suggestion-text">${suggestion.name}</div>
+        <div class="suggestion-hint">Press Tab to complete, or click to visit</div>
+      `;
+      searchSuggestion.style.display = 'block';
+    }
+
+    function hideSuggestion() {
+      searchSuggestion.style.display = 'none';
+      currentSuggestion = null;
+    }
+
+    function navigateToSuggestion() {
+      if (currentSuggestion && currentSuggestion.token) {
+        const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
+        const url = `/article/${currentSuggestion.token}?u=${encodeURIComponent(name)}`;
+        console.log('Navigating to:', url);
+        window.location.href = url;
+      } else {
+        console.error('No valid suggestion to navigate to:', currentSuggestion);
+      }
+    }
+
+    function completeWithSuggestion() {
+      if (currentSuggestion) {
+        searchInput.value = currentSuggestion.name;
+        hideSuggestion();
+      }
+    }
+
+    // Search input event listeners
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value;
+      
+      // Clear existing timeout
+      if (searchTimeout) {
+        clearTimeout(searchTimeout);
+      }
+
+      // Set new timeout for debounced search
+      searchTimeout = setTimeout(() => {
+        performSearch(query);
+      }, 300);
+    });
+
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab' && currentSuggestion) {
+        e.preventDefault();
+        completeWithSuggestion();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (currentSuggestion) {
+          navigateToSuggestion();
+        } else {
+          // Perform search with current input
+          const query = searchInput.value.trim();
+          if (query) {
+            performSearch(query);
+          }
+        }
+      } else if (e.key === 'Escape') {
+        hideSuggestion();
+        searchInput.blur();
+      }
+    });
+
+    // Search suggestion click - improved for single click
+    searchSuggestion.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      navigateToSuggestion();
+    });
+
+    // Also handle mousedown for better responsiveness
+    searchSuggestion.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      navigateToSuggestion();
+    });
+
+    // Search button click
+    searchBtn.addEventListener('click', () => {
+      const query = searchInput.value.trim();
+      if (query) {
+        performSearch(query);
+      }
+    });
+
+    // Hide suggestion when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!searchInput.contains(e.target) && !searchSuggestion.contains(e.target)) {
+        hideSuggestion();
+      }
+    });
+
+    // Hide suggestion when input loses focus - increased delay for better click handling
+    searchInput.addEventListener('blur', () => {
+      // Longer delay to allow for suggestion clicks
+      setTimeout(() => {
+        hideSuggestion();
+      }, 200);
+    });
+  </script>
+
+
 
 </body>
 </html>

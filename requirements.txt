@@ -1,5 +1,14 @@
-flask
-openai
-python-dotenv
-spacy
-tqdm
+flask==3.0.0
+openai==1.99.3
+python-dotenv==1.0.0
+spacy==3.7.2
+urllib3>=2.0.0
+# Performance optimizations
+gunicorn==21.2.0
+gevent==23.9.1
+# Caching and async
+redis==5.0.1
+aiohttp==3.9.1
+# Additional utilities
+python-dateutil==2.8.2
+psutil==5.9.6
