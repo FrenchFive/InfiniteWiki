@@ -621,6 +621,14 @@ def api_user_recent():
         "recent": get_user_recent_optimized(user)
     })
 
+@app.get('/api/user_stats')
+def api_user_stats():
+    """API endpoint for user's stats."""
+    user = current_user()
+    return jsonify({
+        "discovery_count": get_user_discovery_count_optimized(user)
+    })
+
 @app.get('/api/stats')
 def api_stats():
     """API endpoint for community stats."""

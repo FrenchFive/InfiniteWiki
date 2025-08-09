@@ -214,6 +214,23 @@
       }
     }
 
+    async function refreshUserStats(name) {
+      try {
+        const url = new URL('/api/user_stats', window.location.origin);
+        url.searchParams.set('u', name);
+        const res = await fetch(url, { cache: 'no-store' });
+        const data = await res.json();
+        
+        // Update user discovery count
+        const userStatValue = document.querySelector('.user-stat__value');
+        if (userStatValue && data.discovery_count !== undefined) {
+          userStatValue.textContent = data.discovery_count;
+        }
+      } catch (e) {
+        console.error('Failed to refresh user stats', e);
+      }
+    }
+
     // --- wire up
     const userInput = document.getElementById('userName');
     const avatar = document.getElementById('userAvatar');
@@ -224,6 +241,7 @@
     setUrlUserParam(currentName, true);
     applyUserToLinks(currentName);
     refreshUserRecent(currentName);
+    refreshUserStats(currentName);
 
     userInput.addEventListener('input', () => {
       currentName = setStoredUser(userInput.value);
@@ -231,6 +249,7 @@
       setUrlUserParam(currentName, true);
       applyUserToLinks(currentName);
       refreshUserRecent(currentName);
+      refreshUserStats(currentName);
     });
 
     document.addEventListener('click', (ev) => {
@@ -315,7 +334,24 @@
       // Speed up loading bar to completion if article finished early
       if (loadingBarInterval) {
         clearInterval(loadingBarInterval);
-        currentProgress = 1; // Set to 100%
+        
+        // Speed up the animation to complete in 1 second
+        const speedUpStartTime = Date.now();
+        const speedUpDuration = 1000; // 1 second
+        const speedUpInterval = setInterval(() => {
+          const speedUpElapsed = Date.now() - speedUpStartTime;
+          const speedUpProgress = Math.min(speedUpElapsed / speedUpDuration, 1);
+          currentProgress = currentProgress + (speedUpProgress * (1 - currentProgress));
+          
+          const loadingBar = loadingStatus?.querySelector('.loading-bar');
+          if (loadingBar) {
+            loadingBar.style.width = (currentProgress * 100) + '%';
+          }
+          
+          if (currentProgress >= 1) {
+            clearInterval(speedUpInterval);
+          }
+        }, 16); // 60fps animation
       }
 
       // Update loading status to "Tokenizing new words" (recreate loading bar with current progress)
@@ -450,9 +486,13 @@
     }
 
     function navigateToSuggestion() {
-      if (currentSuggestion) {
+      if (currentSuggestion && currentSuggestion.token) {
         const name = (localStorage.getItem('iw_username') || 'user').trim() || 'user';
-        window.location.href = `/article/${currentSuggestion.token}?u=${encodeURIComponent(name)}`;
+        const url = `/article/${currentSuggestion.token}?u=${encodeURIComponent(name)}`;
+        console.log('Navigating to:', url);
+        window.location.href = url;
+      } else {
+        console.error('No valid suggestion to navigate to:', currentSuggestion);
       }
     }
 
@@ -484,6 +524,7 @@
         completeWithSuggestion();
       } else if (e.key === 'Enter') {
         e.preventDefault();
+        e.stopPropagation();
         if (currentSuggestion) {
           navigateToSuggestion();
         } else {
@@ -499,8 +540,19 @@
       }
     });
 
-    // Search suggestion click
-    searchSuggestion.addEventListener('click', () => {
+    // Search suggestion click - improved for single click
+    searchSuggestion.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      navigateToSuggestion();
+    });
+
+    // Also handle mousedown for better responsiveness
+    searchSuggestion.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
       navigateToSuggestion();
     });
 
@@ -519,12 +571,12 @@
       }
     });
 
-    // Hide suggestion when input loses focus
+    // Hide suggestion when input loses focus - increased delay for better click handling
     searchInput.addEventListener('blur', () => {
-      // Small delay to allow for suggestion clicks
+      // Longer delay to allow for suggestion clicks
       setTimeout(() => {
         hideSuggestion();
-      }, 100);
+      }, 200);
     });
   </script>
 
